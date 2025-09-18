@@ -1,0 +1,25 @@
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    volumes:
+    - ./backend:/app
+    - /app/node_modules
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+
+  db:
+    build: ./db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: testdb
+    ports:
+      - "3307:3306"
