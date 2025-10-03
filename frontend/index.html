@@ -5,7 +5,7 @@
   <script>
     async function cargarUsuarios() {
       try {
-        const res = await fetch("http://localhost:3000/users");
+        const res = await fetch("/api/users");
         const data = await res.json();
         let lista = document.getElementById("usuarios");
         lista.innerHTML = "";

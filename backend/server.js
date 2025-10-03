@@ -5,7 +5,12 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: ['http://miapp.local', 'http://localhost', 'http://frontend'],
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 app.use(express.json());
 
 const pool = mysql.createPool({
@@ -44,8 +49,8 @@ app.get("/users", (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`SERVIDOR BACKEND EN http://localhost:${port}`);
+app.listen(port, "0.0.0.0", () => {
+  console.log(`SERVIDOR BACKEND EN http://0.0.0.0:${port}`);
 });
 
 process.on('SIGINT', () => {
