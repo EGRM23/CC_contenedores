@@ -1,0 +1,126 @@
+---
+- name: 🚀 Desplegar Infraestructura AWS y Aplicación K8s
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  tasks:
+    - name: Crear VPC
+      community.aws.ec2_vpc_net:
+        name: "{{ project_name }}-vpc"
+        cidr_block: "{{ vpc_cidr }}"
+        region: "{{ aws_region }}"
+        tags:
+          Project: "{{ project_name }}"
+      register: vpc
+
+    - name: Crear Internet Gateway
+      community.aws.ec2_vpc_igw:
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ aws_region }}"
+      register: igw
+
+    - name: Crear Subnet
+      community.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc.vpc.id }}"
+        cidr: "{{ subnet_cidr }}"
+        region: "{{ aws_region }}"
+        az: "{{ aws_region }}a"
+        tags:
+          Name: "{{ project_name }}-subnet"
+      register: subnet
+
+    - name: Crear Security Group
+      community.aws.ec2_security_group:
+        name: "{{ project_name }}-sg"
+        description: "Security group para Kubernetes y aplicación"
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ aws_region }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            ports:
+              - 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            ports:
+              - 443
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            ports:
+              - 3000
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            ports:
+              - 6443  # K3s API
+            cidr_ip: 0.0.0.0/0
+        tags:
+          Project: "{{ project_name }}"
+      register: security_group
+
+    - name: Crear Launch Template
+      community.aws.ec2_launch_template:
+        name: "{{ project_name }}-template"
+        region: "{{ aws_region }}"
+        image_id: "ami-0c02fb55956c7d316"  # Amazon Linux 2
+        instance_type: "{{ instance_type }}"
+        key_name: "{{ key_name }}"
+        security_group_ids:
+          - "{{ security_group.group_id }}"
+        user_data: "{{ lookup('template', 'templates/user-data.sh.j2') }}"
+        block_device_mappings:
+          - device_name: /dev/xvda
+            ebs:
+              volume_size: 20
+              volume_type: gp3
+        tags:
+          Project: "{{ project_name }}"
+
+    - name: Crear Auto Scaling Group
+      community.aws.ec2_asg:
+        name: "{{ project_name }}-asg"
+        availability_zones:
+          - "{{ aws_region }}a"
+        launch_template:
+          launch_template_name: "{{ project_name }}-template"
+          version: "$Latest"
+        min_size: "{{ min_size }}"
+        max_size: "{{ max_size }}"
+        desired_capacity: "{{ desired_capacity }}"
+        vpc_zone_identifier:
+          - "{{ subnet.subnet.id }}"
+        tags:
+          - key: Name
+            value: "{{ project_name }}-instance"
+            propagate_at_launch: true
+          - key: Project
+            value: "{{ project_name }}"
+            propagate_at_launch: true
+        wait_for_instances: true
+        wait_timeout: 600
+
+    - name: Esperar a que las instancias estén listas
+      pause:
+        minutes: 2
+
+    - name: Obtener IPs de las instancias
+      community.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Project": "{{ project_name }}"
+      register: ec2_instances
+
+    - name: Mostrar información de acceso
+      debug:
+        msg:
+          - "Infraestructura desplegada exitosamente!"
+          - "Instancias EC2 creadas:"
+          - "{% for instance in ec2_instances.instances %}
+             Instancia {{ loop.index }} - IP Pública: {{ instance.public_ip_address }}
+             {% endfor %}"
+          - "   Accede a tu aplicación con:"
+          - "   http://{{ ec2_instances.instances[0].public_ip_address }} (usando NodePort)"
+          - "   O configura en /etc/hosts: {{ ec2_instances.instances[0].public_ip_address }} {{ domain }}"

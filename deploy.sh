@@ -18,7 +18,6 @@ echo "Desplegando servicio de frontend..."
 kubectl apply -f k8s/frontend-deployment.yaml
 kubectl apply -f k8s/frontend-service.yaml
 
-echo "=== INSTALANDO INGRESS CONTROLLER ==="
 echo "Instalando NGINX Ingress Controller..."
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
 
@@ -34,14 +33,12 @@ kubectl get pods -n ingress-nginx
 echo "Obteniendo IP del Ingress..."
 kubectl get svc -n ingress-nginx ingress-nginx-controller
 
-echo "=== CONFIGURANDO INGRESS ==="
 echo "Desplegando reglas de Ingress..."
 kubectl apply -f k8s/ingress.yaml
 
 echo "Esperando a que el Ingress esté listo..."
 sleep 10
 
-echo "=== CONFIGURACIÓN DE ACCESO ==="
 echo "Obteniendo IP para acceso..."
 INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 
