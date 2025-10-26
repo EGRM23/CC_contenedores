@@ -13,3 +13,5 @@ subnet_cidr: "10.0.1.0/24"
 
 app_name: "miapp"
 domain: "miapp.local"
+
+git_repo: "https://github.com/EGRM23/CC-Contenedores.git"

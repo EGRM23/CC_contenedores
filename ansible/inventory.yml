@@ -5,4 +5,4 @@ all:
     aws_secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
   hosts:
     localhost:
-      connection: local
+      ansible_connection: local
