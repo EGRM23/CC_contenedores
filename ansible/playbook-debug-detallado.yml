@@ -1,0 +1,47 @@
+---
+- name: 🔧 DIAGNÓSTICO COMPLETO Security Group
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  tasks:
+    - name: 📋 Verificar variables
+      debug:
+        msg:
+          - "Project: {{ project_name }}"
+          - "Region: {{ aws_region }}"
+          - "VPC: vpc-0711a0cc72ac117e9"
+
+    - name: 🔍 Verificar que la VPC existe y es accesible
+      amazon.aws.ec2_vpc_net_info:
+        vpc_ids:
+          - "vpc-0711a0cc72ac117e9"
+        region: "{{ aws_region }}"
+      register: vpc_info
+
+    - name: 📝 Información de la VPC
+      debug:
+        var: vpc_info
+
+    - name: 🧪 PROBAR creación MUY simple de Security Group
+      amazon.aws.ec2_security_group:
+        name: "cc-contenedores-sg"
+        description: "Test security group simple"
+        vpc_id: "vpc-0711a0cc72ac117e9"
+        region: "{{ aws_region }}"
+        rules: []  # 👈 SIN REGLAS
+        tags:
+          Test: "yes"
+      register: test_sg_result
+
+    - name: 📝 Resultado del test simple
+      debug:
+        var: test_sg_result
+
+    - name: 🧹 Limpiar test
+      amazon.aws.ec2_security_group:
+        name: "cc-contenedores-sg"
+        region: "{{ aws_region }}"
+        state: absent
+      ignore_errors: yes
+      when: test_sg_result is defined and test_sg_result.group_id is defined
