@@ -1,0 +1,39 @@
+---
+- name: 🚀 Desplegar Infraestructura Completa en AWS EKS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
+    - group_vars/aws.yaml
+
+  tasks:
+    - name: 📋 Verificar credenciales AWS
+      debug:
+        msg: "🚀 Iniciando despliegue en AWS región: {{ aws_region }}"
+
+    - name: 🏗️ Crear infraestructura base AWS
+      include_tasks: aws-infra-setup.yaml
+
+    - name: ☸️ Crear cluster EKS
+      include_tasks: aws-eks-setup.yaml
+
+    - name: ⏳ Esperar que cluster EKS esté listo
+      pause:
+        minutes: 3
+        prompt: "Esperando que el cluster EKS esté completamente disponible..."
+
+    - name: 🔧 Configurar acceso a cluster EKS
+      include_tasks: k8s-config-setup.yaml
+
+    - name: 🚀 Desplegar aplicación en Kubernetes
+      include_tasks: k8s-deployment.yaml
+
+    - name: 🌐 Configurar Ingress y DNS
+      include_tasks: k8s-ingress-setup.yaml
+
+    - name: 📊 Verificar despliegue
+      include_tasks: k8s-verification.yaml
+
+    - name: 🎉 Mostrar información de acceso
+      include_tasks: show-access-info.yaml

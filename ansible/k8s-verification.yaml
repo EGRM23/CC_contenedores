@@ -1,0 +1,34 @@
+---
+- name: 🔍 Verificar pods en ejecución
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ k8s_namespace }}"
+  register: pods_info
+
+- name: 📊 Mostrar estado de los pods
+  debug:
+    msg: |
+      📊 ESTADO DE LOS PODS:
+      {% for pod in pods_info.resources %}
+      - {{ pod.metadata.name }}: {{ pod.status.phase }}
+      {% endfor %}
+
+- name: 🔍 Verificar servicios
+  kubernetes.core.k8s_info:
+    kind: Service
+    namespace: "{{ k8s_namespace }}"
+  register: services_info
+
+- name: 🔍 Verificar ingress
+  kubernetes.core.k8s_info:
+    kind: Ingress
+    namespace: "{{ k8s_namespace }}"
+  register: ingress_info
+
+- name: ✅ Verificación completada
+  debug:
+    msg: |
+      ✅ VERIFICACIÓN COMPLETADA:
+      - Pods desplegados: {{ pods_info.resources | length }}
+      - Servicios creados: {{ services_info.resources | length }}
+      - Ingress configurado: {{ ingress_info.resources | length > 0 }}

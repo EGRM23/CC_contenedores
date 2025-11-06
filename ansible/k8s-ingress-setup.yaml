@@ -1,0 +1,59 @@
+---
+- name: 📦 Instalar Nginx Ingress Controller
+  kubernetes.core.helm:
+    name: nginx-ingress
+    namespace: ingress-nginx
+    chart_ref: ingress-nginx/ingress-nginx
+    chart_repo_url: https://kubernetes.github.io/ingress-nginx
+    release_values:
+      controller:
+        service:
+          type: LoadBalancer
+        publishService:
+          enabled: true
+
+- name: ⏳ Esperar que LoadBalancer esté listo
+  kubernetes.core.k8s_info:
+    kind: Service
+    namespace: ingress-nginx
+    name: nginx-ingress-ingress-nginx-controller
+  register: ingress_service
+  until: ingress_service.resources[0].status.loadBalancer.ingress is defined
+  retries: 12
+  delay: 10
+
+- name: 🌐 Crear Ingress para la aplicación
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: app-ingress
+        namespace: "{{ k8s_namespace }}"
+        annotations:
+          nginx.ingress.kubernetes.io/rewrite-target: /$2
+          nginx.ingress.kubernetes.io/use-regex: "true"
+      spec:
+        ingressClassName: nginx
+        rules:
+        - host: "{{ project_name }}.local"
+          http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: frontend
+                  port:
+                    number: 80
+            - path: /api(/|$)(.*)
+              pathType: ImplementationSpecific
+              backend:
+                service:
+                  name: backend
+                  port:
+                    number: 3000
+
+- name: 📝 Obtener URL del LoadBalancer
+  set_fact:
+    load_balancer_hostname: "{{ ingress_service.resources[0].status.loadBalancer.ingress[0].hostname }}"

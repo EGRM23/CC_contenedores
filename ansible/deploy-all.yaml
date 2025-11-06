@@ -1,0 +1,11 @@
+---
+- name: 🚀 Despliegue Completo - CC Contenedores en EKS
+  hosts: localhost
+  connection: local
+  vars_files:
+    - group_vars/all.yaml
+    - group_vars/aws.yaml
+
+  tasks:
+    - name: 🎯 Ejecutar despliegue completo
+      include_tasks: site.yaml

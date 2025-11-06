@@ -1,0 +1,195 @@
+---
+- name: 🔐 Crear Secret para MySQL
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mysql-secret
+        namespace: "{{ k8s_namespace }}"
+      type: Opaque
+      data:
+        mysql-root-password: "{{ mysql_root_password | b64encode }}"
+        mysql-database: "{{ mysql_database | b64encode }}"
+
+- name: 💾 Crear Persistent Volume Claim para MySQL
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: mysql-pvc
+        namespace: "{{ k8s_namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: "{{ db_storage }}"
+
+- name: 🗄️ Desplegar Base de Datos MySQL
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: db
+        namespace: "{{ k8s_namespace }}"
+        labels:
+          app: db
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: db
+        template:
+          metadata:
+            labels:
+              app: db
+          spec:
+            containers:
+              - name: db
+                image: "{{ db_image }}"
+                imagePullPolicy: IfNotPresent
+                env:
+                  - name: MYSQL_ROOT_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secret
+                        key: mysql-root-password
+                  - name: MYSQL_DATABASE
+                    valueFrom:
+                      secretKeyRef:
+                        name: mysql-secret
+                        key: mysql-database
+                ports:
+                  - containerPort: 3306
+                volumeMounts:
+                  - name: mysql-storage
+                    mountPath: /var/lib/mysql
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: 1000m
+                    memory: 1Gi
+            volumes:
+              - name: mysql-storage
+                persistentVolumeClaim:
+                  claimName: mysql-pvc
+
+- name: 🌐 Servicio para Base de Datos
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: db
+        namespace: "{{ k8s_namespace }}"
+      spec:
+        selector:
+          app: db
+        ports:
+          - port: 3306
+            targetPort: 3306
+
+- name: 🔧 Desplegar Backend
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: backend
+        namespace: "{{ k8s_namespace }}"
+        labels:
+          app: backend
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: backend
+        template:
+          metadata:
+            labels:
+              app: backend
+          spec:
+            containers:
+              - name: backend
+                image: "{{ backend_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 3000
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+
+- name: 🌐 Servicio para Backend
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: backend
+        namespace: "{{ k8s_namespace }}"
+      spec:
+        selector:
+          app: backend
+        ports:
+          - port: 3000
+            targetPort: 3000
+
+- name: 🎨 Desplegar Frontend
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+        namespace: "{{ k8s_namespace }}"
+        labels:
+          app: frontend
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: frontend
+        template:
+          metadata:
+            labels:
+              app: frontend
+          spec:
+            containers:
+              - name: frontend
+                image: "{{ frontend_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 80
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+
+- name: 🌐 Servicio para Frontend
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: frontend
+        namespace: "{{ k8s_namespace }}"
+      spec:
+        type: NodePort
+        selector:
+          app: frontend
+        ports:
+          - port: 80
+            targetPort: 80
+            nodePort: 30080

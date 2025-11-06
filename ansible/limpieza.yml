@@ -28,6 +28,38 @@
           {% endfor %}
           Total: {{ todas_instancias.instances | length }}
 
+    - name: 🔍 Buscar instancias de despliegues anteriores (por nombre o tags antiguos)
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ project_name }}-instance"
+          "tag:Environment": "{{ project_name }}"
+          "tag:app": "{{ project_name }}"
+        include_deprecated: true
+      register: instancias_anteriores
+
+    - name: 📋 Mostrar instancias de despliegues anteriores encontradas
+      debug:
+        msg: |
+          🗑️  INSTANCIAS DE DESPLIEGUES ANTERIORES:
+          {% for instance in instancias_anteriores.instances %}
+          - {{ instance.instance_id }} ({{ instance.state.name }}) - Tags: {{ instance.tags | default({}) }}
+          {% endfor %}
+          Total: {{ instancias_anteriores.instances | length }}
+
+    - name: 🚫 TERMINAR instancias de despliegues anteriores
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ item.instance_id }}"
+        region: "{{ aws_region }}"
+        state: absent
+        wait: yes
+      loop: "{{ instancias_anteriores.instances }}"
+      when: 
+        - instancias_anteriores.instances | length > 0
+        - item.state.name in ['running', 'stopped', 'stopping']
+      loop_control:
+        label: "{{ item.instance_id }}"
+
     - name: 🚫 TERMINAR instancias running/stopped (forzar eliminación)
       amazon.aws.ec2_instance:
         instance_ids: "{{ item.instance_id }}"
@@ -38,6 +70,43 @@
       when: item.state.name in ['running', 'stopped', 'stopping']
       loop_control:
         label: "{{ item.instance_id }}"
+
+    - name: 🗑️ Eliminar Security Group antiguo (si existe y no tiene dependencias)
+      block:
+        - name: 🔍 Buscar Security Group por nombre
+          amazon.aws.ec2_security_group_info:
+            region: "{{ aws_region }}"
+            filters:
+              group-name: "{{ project_name }}-sg"
+          register: sg_info
+
+        - name: 🚫 Eliminar Security Group encontrado
+          amazon.aws.ec2_security_group:
+            region: "{{ aws_region }}"
+            name: "{{ project_name }}-sg"
+            state: absent
+          when: sg_info.security_groups | length > 0
+          ignore_errors: yes
+          register: sg_delete_result
+
+        - name: 📋 Mostrar resultado de eliminación de Security Group
+          debug:
+            msg: |
+              {% if sg_info.security_groups | length > 0 %}
+                {% if sg_delete_result.failed %}
+                  ⚠️  No se pudo eliminar el Security Group '{{ project_name }}-sg'. Puede tener dependencias.
+                  Error: {{ sg_delete_result.msg }}
+                {% else %}
+                  ✅ Security Group '{{ project_name }}-sg' eliminado exitosamente
+                {% endif %}
+              {% else %}
+                  ℹ️  Security Group '{{ project_name }}-sg' no encontrado, nada que eliminar
+              {% endif %}
+      rescue:
+        - name: ⚠️  Error al eliminar Security Group
+          debug:
+            msg: "⚠️  No se pudo eliminar el Security Group '{{ project_name }}-sg'. Puede estar en uso por otros recursos."
+
 
     - name: 🗑️ 1. Eliminar Auto Scaling Group (forzar)
       shell: |
@@ -160,6 +229,7 @@
           ✓ Alarmas de CloudWatch
           ✓ TODAS las instancias del proyecto (running/stopped)
           ✓ Instancias de prueba específicas
+          ✓ Security Group antiguo (si no tenía dependencias)
           
           ✅ RECURSOS MANTENIDOS:
           - VPC y Subnet (infraestructura de red)

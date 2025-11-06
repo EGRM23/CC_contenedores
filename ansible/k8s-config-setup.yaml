@@ -1,0 +1,31 @@
+---
+- name: 📝 Actualizar kubeconfig para EKS
+  shell: |
+    aws eks update-kubeconfig \
+      --region {{ aws_region }} \
+      --name {{ eks_cluster_name }}
+  register: kubeconfig_result
+
+- name: 🔍 Verificar conexión con cluster
+  kubernetes.core.k8s_info:
+    kind: Node
+  register: nodes_info
+
+- name: 📊 Mostrar información del cluster
+  debug:
+    msg: |
+      ✅ Conexión exitosa con EKS Cluster:
+      - Nodos disponibles: {{ nodes_info.resources | length }}
+      - Cluster: {{ eks_cluster_name }}
+      - Región: {{ aws_region }}
+
+- name: 🏷️ Crear namespace para la aplicación
+  kubernetes.core.k8s:
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ k8s_namespace }}"
+        labels:
+          name: "{{ k8s_namespace }}"
+          project: "{{ project_name }}"
