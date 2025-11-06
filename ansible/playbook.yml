@@ -7,106 +7,6 @@
     ansible_python_interpreter: /home/egrm23/miniconda3/bin/python3.13
 
   tasks:
-    - name: 🧹 Limpiar recursos existentes
-      block:
-        - name: Eliminar Auto Scaling Group
-          amazon.aws.ec2_asg:
-            name: "{{ project_name }}-asg"
-            region: "{{ aws_region }}"
-            state: absent
-          ignore_errors: yes
-
-        - name: Eliminar Launch Template
-          amazon.aws.ec2_launch_template:
-            name: "{{ project_name }}-template"
-            region: "{{ aws_region }}"
-            state: absent
-          ignore_errors: yes
-
-      #   - name: Eliminar Auto Scaling Group existente
-      #     amazon.aws.ec2_asg:
-      #       name: "{{ project_name }}-asg"
-      #       region: "{{ aws_region }}"
-      #       state: absent
-      #     ignore_errors: yes
-      #     register: asg_cleanup
-
-      #   - name: Eliminar Launch Template existente
-      #     amazon.aws.ec2_launch_template:
-      #       name: "{{ project_name }}-template"
-      #       region: "{{ aws_region }}"
-      #       state: absent
-      #     ignore_errors: yes
-      #     register: lt_cleanup
-
-      #   - name: Buscar Security Groups existentes
-      #     amazon.aws.ec2_security_group_info:
-      #       region: "{{ aws_region }}"
-      #       filters:
-      #         "tag:Project": "{{ project_name }}"
-      #     register: existing_sgs
-
-      #   - name: Eliminar Security Groups existentes
-      #     amazon.aws.ec2_security_group:
-      #       group_id: "{{ item.group_id }}"
-      #       region: "{{ aws_region }}"
-      #       state: absent
-      #     loop: "{{ existing_sgs.security_groups }}"
-      #     when: existing_sgs.security_groups | length > 0
-      #     ignore_errors: yes
-      #     register: sg_cleanup
-
-      #   - name: Buscar VPC existente
-      #     amazon.aws.ec2_vpc_net_info:
-      #       region: "{{ aws_region }}"
-      #       filters:
-      #         "tag:Project": "{{ project_name }}"
-      #     register: existing_vpcs
-
-      #   - name: Eliminar subnets de VPC existente
-      #     amazon.aws.ec2_vpc_subnet:
-      #       state: absent
-      #       vpc_id: "{{ item.vpc_id }}"
-      #       region: "{{ aws_region }}"
-      #     loop: "{{ existing_vpcs.vpcs | default([]) }}"
-      #     when: existing_vpcs.vpcs | length > 0
-      #     ignore_errors: yes
-
-      #   - name: Eliminar Internet Gateways de VPC existente
-      #     amazon.aws.ec2_vpc_igw_info:
-      #       region: "{{ aws_region }}"
-      #       filters:
-      #         "tag:Project": "{{ project_name }}"
-      #     register: existing_igws
-
-      #   - name: Desvincular y eliminar Internet Gateways
-      #     amazon.aws.ec2_vpc_igw:
-      #       igw_id: "{{ item.internet_gateway_id }}"
-      #       state: absent
-      #       region: "{{ aws_region }}"
-      #     loop: "{{ existing_igws.internet_gateways | default([]) }}"
-      #     when: existing_igws.internet_gateways | length > 0
-      #     ignore_errors: yes
-
-      #   - name: Eliminar VPC existente
-      #     amazon.aws.ec2_vpc_net:
-      #       vpc_id: "{{ item.vpc_id }}"
-      #       region: "{{ aws_region }}"
-      #       state: absent
-      #     loop: "{{ existing_vpcs.vpcs | default([]) }}"
-      #     when: existing_vpcs.vpcs | length > 0
-      #     ignore_errors: yes
-
-      # rescue:
-      #   - name: ⚠️  Algunos recursos no pudieron limpiarse, continuando...
-      #     debug:
-      #       msg: "Algunos recursos existentes no pudieron eliminarse, pero continuamos..."
-
-      always:
-        - name: ⏳ Esperar después de la limpieza
-          pause:
-            seconds: 15
-    
     - name: 🏗️ Gestionar VPC existente o crear nueva
       block:
         - name: Buscar VPC existente
@@ -221,93 +121,97 @@
           set_fact:
             subnet_id: "{{ subnet_emergencia.subnet.id }}"
     
-    - name: 🔍 DEBUG - Diagnosticar problema Security Group
-      block:
-        - name: Verificar VPC actual
-          debug:
-            msg: "VPC ID que usaremos: {{ vpc_id }}"
-
-        - name: Buscar Security Groups por tag Project
-          amazon.aws.ec2_security_group_info:
-            region: "{{ aws_region }}"
-            filters:
-              "tag:Project": "{{ project_name }}"
-              vpc-id: "{{ vpc_id }}"
-          register: sg_existente
-
-        - name: Mostrar estado de Security Group
-          debug:
-            msg: "Security Group existente: {{ 'SÍ' if sg_existente.security_groups else 'NO' }}"
-
-        - name: Eliminar Security Group existente si existe
-          amazon.aws.ec2_security_group:
-            group_id: "{{ item.group_id }}"
-            region: "{{ aws_region }}"
-            state: absent
-          loop: "{{ sg_existente.security_groups }}"
-          when: sg_existente.security_groups | length > 0
-          ignore_errors: yes
 
       always:
         - pause:
             seconds: 5
 
-    - name: 🛡️ Crear Security Group
+    # - name: 🛡️ Crear Security Group
+    #   block:
+    #     - name: Intentar crear Security Group
+    #       command: >
+    #         aws ec2 create-security-group
+    #         --group-name "{{ project_name }}-sg"
+    #         --description "Security group para la app"
+    #         --vpc-id "{{ vpc_id }}"
+    #         --region "{{ aws_region }}"
+    #         --tag-specifications "ResourceType=security-group,Tags=[{Key=Project,Value={{ project_name }}}]"
+    #       register: sg_cli
+
+    #     - name: 📥 Extraer Group ID
+    #       set_fact:
+    #         security_group_id: "{{ (sg_cli.stdout | from_json).GroupId }}"
+
+    #     - name: 🔒 Agregar regla SSH
+    #       command: >
+    #         aws ec2 authorize-security-group-ingress
+    #         --group-id "{{ security_group_id }}"
+    #         --protocol tcp
+    #         --port 22
+    #         --cidr 0.0.0.0/0
+    #         --region "{{ aws_region }}"
+
+    #     - name: 🌐 Agregar regla HTTP
+    #       command: >
+    #         aws ec2 authorize-security-group-ingress
+    #         --group-id "{{ security_group_id }}"
+    #         --protocol tcp
+    #         --port 80
+    #         --cidr 0.0.0.0/0
+    #         --region "{{ aws_region }}"
+
+    #     - name: 📡 Agregar regla Backend
+    #       command: >
+    #         aws ec2 authorize-security-group-ingress
+    #         --group-id "{{ security_group_id }}"
+    #         --protocol tcp
+    #         --port 3000
+    #         --cidr 0.0.0.0/0
+    #         --region "{{ aws_region }}"
+
+    #     - name: 🔐 Agregar regla HTTPS
+    #       command: >
+    #         aws ec2 authorize-security-group-ingress
+    #         --group-id "{{ security_group_id }}"
+    #         --protocol tcp
+    #         --port 443
+    #         --cidr 0.0.0.0/0
+    #         --region "{{ aws_region }}"
+
+    #     - name: 📝 Guardar Security Group ID
+    #       set_fact:
+    #         security_group:
+    #           group_id: "{{ security_group_id }}"
+
+    - name: 🛡️ Gestionar Security Group
       block:
-        - name: Intentar crear Security Group (via AWS CLI)
-          command: >
-            aws ec2 create-security-group
-            --group-name "{{ project_name }}-sg"
-            --description "Security group para la app"
-            --vpc-id "{{ vpc_id }}"
-            --region "{{ aws_region }}"
-            --tag-specifications "ResourceType=security-group,Tags=[{Key=Project,Value={{ project_name }}}]"
-          register: sg_cli
+        - name: Buscar Security Group existente
+          amazon.aws.ec2_security_group_info:
+            region: "{{ aws_region }}"
+            filters:
+              group-name: "{{ project_name }}-sg"
+              vpc-id: "{{ vpc_id }}"
+          register: sg_existente
 
-        - name: 📥 Extraer Group ID
+        - name: Crear Security Group si no existe
+          amazon.aws.ec2_security_group:
+            name: "{{ project_name }}-sg"
+            description: "Security group para la app"
+            vpc_id: "{{ vpc_id }}"
+            region: "{{ aws_region }}"
+            tags:
+              Project: "{{ project_name }}"
+          register: sg_nuevo
+          when: sg_existente.security_groups | length == 0
+
+        - name: Configurar Security Group ID
           set_fact:
-            security_group_id: "{{ (sg_cli.stdout | from_json).GroupId }}"
+            security_group_id: "{{ (sg_existente.security_groups[0].group_id if sg_existente.security_groups else sg_nuevo.group_id) }}"
+            security_group_action: "{{ 'reutilizado' if sg_existente.security_groups else 'creado' }}"
 
-        - name: 🔒 Agregar regla SSH
-          command: >
-            aws ec2 authorize-security-group-ingress
-            --group-id "{{ security_group_id }}"
-            --protocol tcp
-            --port 22
-            --cidr 0.0.0.0/0
-            --region "{{ aws_region }}"
-
-        - name: 🌐 Agregar regla HTTP
-          command: >
-            aws ec2 authorize-security-group-ingress
-            --group-id "{{ security_group_id }}"
-            --protocol tcp
-            --port 80
-            --cidr 0.0.0.0/0
-            --region "{{ aws_region }}"
-
-        - name: 📡 Agregar regla Backend
-          command: >
-            aws ec2 authorize-security-group-ingress
-            --group-id "{{ security_group_id }}"
-            --protocol tcp
-            --port 3000
-            --cidr 0.0.0.0/0
-            --region "{{ aws_region }}"
-
-        - name: 🔐 Agregar regla HTTPS
-          command: >
-            aws ec2 authorize-security-group-ingress
-            --group-id "{{ security_group_id }}"
-            --protocol tcp
-            --port 443
-            --cidr 0.0.0.0/0
-            --region "{{ aws_region }}"
-
-        - name: 📝 Guardar Security Group ID
-          set_fact:
-            security_group:
-              group_id: "{{ security_group_id }}"
+        - name: Mostrar información del Security Group
+          debug:
+            msg: "Security Group {{ security_group_action }} con ID: {{ security_group_id }}"
 
     - name: 🚀 Crear Launch Template
       amazon.aws.ec2_launch_template:
@@ -317,7 +221,7 @@
         instance_type: "{{ instance_type }}"
         key_name: "{{ key_name }}"
         security_group_ids:
-          - "{{ security_group.group_id }}"
+          - "{{ security_group_id }}"
         user_data: "{{ lookup('template', 'templates/user-data.sh.j2') | b64encode }}"
         block_device_mappings:
           - device_name: /dev/xvda
@@ -340,6 +244,7 @@
         desired_capacity: "{{ desired_capacity }}"
         vpc_zone_identifier:
           - "{{ subnet_id }}"
+        
         tags:
           - key: Name
             value: "{{ project_name }}-instance"
@@ -348,6 +253,39 @@
             value: "{{ project_name }}"
             propagate_at_launch: true
         wait_for_instances: false
+
+    - name: ⚙️ Crear políticas de escalado automático
+      block:
+        - name: 📊 Crear política de escalado por CPU alta
+          community.aws.autoscaling_policy:
+            name: "scale-up-high-cpu"
+            state: present
+            asg_name: "{{ project_name }}-asg"
+            region: "{{ aws_region }}"
+            adjustment_type: "ChangeInCapacity"
+            scaling_adjustment: 1
+            min_adjustment_step: 1
+            cooldown: 60
+          register: scale_up_policy
+
+        - name: 📉 Crear política de descenso por CPU baja
+          community.aws.autoscaling_policy:
+            name: "scale-down-low-cpu"
+            state: present
+            asg_name: "{{ project_name }}-asg"
+            region: "{{ aws_region }}"
+            adjustment_type: "ChangeInCapacity"
+            scaling_adjustment: -1
+            min_adjustment_step: 1
+            cooldown: 300
+          register: scale_down_policy
+
+        - name: ✅ Confirmar creación de políticas
+          debug:
+            msg: |
+              ✅ Políticas de Auto Scaling creadas:
+              📈 Escalado: {{ scale_up_policy.policy_name }} (ARN: {{ scale_up_policy.policy_arn }})
+              📉 Descenso: {{ scale_down_policy.policy_name }} (ARN: {{ scale_down_policy.policy_arn }})
 
     - name: ⏳ Esperar a que las instancias estén en servicio
       amazon.aws.autoscaling_group:
@@ -388,7 +326,7 @@
           ✅ Recursos creados:
           🔗 VPC ID: {{ vpc_id }}
           🔗 Subnet ID: {{ subnet_id }}
-          🛡️ Security Group: {{ security_group.group_id }}
+          🛡️ Security Group: {{ security_group_id }}
           📈 Auto Scaling Group: {{ project_name }}-asg
           🚀 Launch Template: {{ project_name }}-template
 

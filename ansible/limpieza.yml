@@ -1,0 +1,168 @@
+---
+- name: 🧹 Limpieza Completa - Eliminar todo incluyendo instancias de prueba
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_name: "cc-contenedores"
+    aws_region: "us-east-1"
+
+  tasks:
+    - name: 📊 Estado actual
+      debug:
+        msg: "🔄 LIMPIEZA COMPLETA - Eliminando TODO incluyendo instancias de prueba"
+
+    - name: 🔍 Buscar TODAS las instancias del proyecto (running, stopped, terminated)
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Project": "{{ project_name }}"
+      register: todas_instancias
+
+    - name: 📋 Mostrar TODAS las instancias encontradas
+      debug:
+        msg: |
+          🗑️  TODAS LAS INSTANCIAS ENCONTRADAS:
+          {% for instance in todas_instancias.instances %}
+          - {{ instance.instance_id }} ({{ instance.state.name }}) - {{ instance.tags.Name | default('Sin nombre') }}
+          {% endfor %}
+          Total: {{ todas_instancias.instances | length }}
+
+    - name: 🚫 TERMINAR instancias running/stopped (forzar eliminación)
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ item.instance_id }}"
+        region: "{{ aws_region }}"
+        state: absent
+        wait: yes
+      loop: "{{ todas_instancias.instances }}"
+      when: item.state.name in ['running', 'stopped', 'stopping']
+      loop_control:
+        label: "{{ item.instance_id }}"
+
+    - name: 🗑️ 1. Eliminar Auto Scaling Group (forzar)
+      shell: |
+        aws autoscaling delete-auto-scaling-group \
+          --auto-scaling-group-name "{{ project_name }}-asg" \
+          --force-delete \
+          --region "{{ aws_region }}" 2>/dev/null || echo "ASG no existe o ya fue eliminado"
+      register: asg_cleanup
+
+    - debug:
+        var: asg_cleanup.stdout
+
+    - name: 🗑️ 2. Eliminar Launch Template  
+      shell: |
+        aws ec2 delete-launch-template \
+          --launch-template-name "{{ project_name }}-template" \
+          --region "{{ aws_region }}" 2>/dev/null || echo "Launch Template no existe o ya fue eliminado"
+      register: lt_cleanup
+
+    - debug:
+        var: lt_cleanup.stdout
+
+    - name: 🗑️ 3. Eliminar políticas de escalado
+      shell: |
+        # Eliminar políticas de escalado si existen
+        aws autoscaling describe-policies \
+          --auto-scaling-group-name "{{ project_name }}-asg" \
+          --region "{{ aws_region }}" \
+          --query 'ScalingPolicies[].PolicyName' \
+          --output text 2>/dev/null | \
+        xargs -r -I {} aws autoscaling delete-policy \
+          --policy-name {} \
+          --auto-scaling-group-name "{{ project_name }}-asg" \
+          --region "{{ aws_region }}" 2>/dev/null || echo "No hay políticas que eliminar"
+      register: policies_cleanup
+
+    - name: 🗑️ 4. Eliminar alarmas de CloudWatch
+      shell: |
+        # Eliminar TODAS las alarmas relacionadas con el proyecto
+        aws cloudwatch describe-alarms \
+          --alarm-name-prefix "{{ project_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'MetricAlarms[].AlarmName' \
+          --output text 2>/dev/null | \
+        xargs -r aws cloudwatch delete-alarms \
+          --alarm-names \
+          --region "{{ aws_region }}" 2>/dev/null || echo "No hay alarmas que eliminar"
+      
+        # También eliminar por tags por si acaso
+        aws cloudwatch describe-alarms \
+          --region "{{ aws_region }}" \
+          --query 'MetricAlarms[?contains(AlarmName, `{{ project_name }}`)].AlarmName' \
+          --output text 2>/dev/null | \
+        xargs -r aws cloudwatch delete-alarms \
+          --alarm-names \
+          --region "{{ aws_region }}" 2>/dev/null || echo "No hay más alarmas"
+      register: alarms_cleanup
+
+    - name: 🗑️ 5. Eliminar instancias de prueba específicas (por tags adicionales)
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Test": "auto-scaling-demo"
+      register: instancias_prueba
+
+    - name: 🚫 TERMINAR instancias de prueba específicas
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ item.instance_id }}"
+        region: "{{ aws_region }}"
+        state: absent
+        wait: yes
+      loop: "{{ instancias_prueba.instances }}"
+      when: instancias_prueba.instances | length > 0
+      loop_control:
+        label: "{{ item.instance_id }}"
+
+    - name: ⏳ Esperar que termine toda la eliminación (2 minutos)
+      pause:
+        minutes: 2
+        prompt: "Esperando que AWS complete TODAS las eliminaciones..."
+
+    - name: 🔍 Verificar instancias FINALES
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Project": "{{ project_name }}"
+          "instance-state-name": ["running", "stopped", "shutting-down"]
+      register: instancias_finales
+
+    - name: ✅ Verificar recursos reusables (solo lectura)
+      shell: |
+        echo "=== RECURSOS MANTENIDOS (SOLO LECTURA) ==="
+        echo "VPC:"
+        aws ec2 describe-vpcs --vpc-ids vpc-0711a0cc72ac117e9 --query 'Vpcs[0].VpcId' --region {{ aws_region }} --output text 2>/dev/null || echo "No existe"
+        
+        echo "Subnet:"
+        aws ec2 describe-subnets --subnet-ids subnet-023c79b9799a5727d --query 'Subnets[0].SubnetId' --region {{ aws_region }} --output text 2>/dev/null || echo "No existe"
+        
+        echo "Security Group:"
+        aws ec2 describe-security-groups --group-ids sg-069a74bb5438309c8 --query 'SecurityGroups[0].GroupId' --region {{ aws_region }} --output text 2>/dev/null || echo "No existe"
+      register: kept_resources
+
+    - debug:
+        var: kept_resources.stdout
+
+    - name: 📊 Resumen FINAL de limpieza
+      debug:
+        msg: |
+          🎉 LIMPIEZA COMPLETA TERMINADA
+          
+          📈 ESTADÍSTICAS:
+          - Instancias encontradas inicialmente: {{ todas_instancias.instances | length }}
+          - Instancias restantes FINALES: {{ instancias_finales.instances | length }}
+          - Instancias ELIMINADAS: {{ todas_instancias.instances | length - instancias_finales.instances | length }}
+          
+          🗑️ RECURSOS ELIMINADOS:
+          ✓ Auto Scaling Group (forzado)
+          ✓ Launch Template
+          ✓ Políticas de escalado
+          ✓ Alarmas de CloudWatch
+          ✓ TODAS las instancias del proyecto (running/stopped)
+          ✓ Instancias de prueba específicas
+          
+          ✅ RECURSOS MANTENIDOS:
+          - VPC y Subnet (infraestructura de red)
+          - Security Group (reglas de firewall)
+          
+          🚀 Ahora puedes ejecutar el playbook de despliegue nuevamente con un entorno COMPLETAMENTE limpio.

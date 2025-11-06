@@ -1,0 +1,83 @@
+---
+- name: 🔔 Configurar Alarmas de CloudWatch para Auto Scaling Automático
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_name: "cc-contenedores"
+    aws_region: "us-east-1"
+
+  tasks:
+    - name: 📋 Obtener ARN de políticas usando AWS CLI
+      ansible.builtin.shell:
+        cmd: |
+          aws autoscaling describe-policies \
+            --auto-scaling-group-name "{{ project_name }}-asg" \
+            --region "{{ aws_region }}" \
+            --query 'ScalingPolicies[].PolicyARN' \
+            --output text
+      register: policy_arns_result
+
+    - name: 💾 Guardar ARNs en variables
+      set_fact:
+        scale_up_policy_arn: "{{ policy_arns_result.stdout.split()[0] }}"
+        scale_down_policy_arn: "{{ policy_arns_result.stdout.split()[1] }}"
+
+    - name: 🔍 Verificar políticas encontradas
+      debug:
+        msg: |
+          Políticas encontradas:
+          - Escalado: {{ scale_up_policy_arn }}
+          - Descenso: {{ scale_down_policy_arn }}
+
+    - name: 🔥 Crear alarma de CPU alta (dispara escalado)
+      community.aws.cloudwatch_metric_alarm:
+        name: "high-cpu-{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+        metric: "CPUUtilization"
+        namespace: "AWS/EC2"
+        statistic: "Average"
+        comparison: "GreaterThanOrEqualToThreshold"
+        threshold: 50.0
+        period: 60
+        evaluation_periods: 2
+        unit: "Percent"
+        description: "Escalar cuando CPU >= 50% por 2 minutos"
+        alarm_actions: 
+          - "{{ scale_up_policy_arn }}"
+        dimensions:
+          AutoScalingGroupName: "{{ project_name }}-asg"
+      register: high_cpu_alarm
+
+    - name: ❄️ Crear alarma de CPU baja (dispara descenso)
+      community.aws.cloudwatch_metric_alarm:
+        name: "low-cpu-{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+        metric: "CPUUtilization"
+        namespace: "AWS/EC2"
+        statistic: "Average"
+        comparison: "LessThanThreshold"
+        threshold: 20.0
+        period: 300
+        evaluation_periods: 2
+        unit: "Percent"
+        description: "Reducir cuando CPU < 20% por 10 minutos"
+        alarm_actions:
+          - "{{ scale_down_policy_arn }}"
+        dimensions:
+          AutoScalingGroupName: "{{ project_name }}-asg"
+      register: low_cpu_alarm
+
+    - name: ✅ Mostrar configuración completada
+      debug:
+        msg: |
+          ✅ AUTO SCALING AUTOMÁTICO CONFIGURADO
+          
+          🔔 Alarmas de CloudWatch creadas:
+          🔥 high-cpu-{{ project_name }}-asg 
+            - CPU >= 50% por 2 minutos → +1 instancia
+          
+          ❄️ low-cpu-{{ project_name }}-asg
+            - CPU < 20% por 10 minutos → -1 instancia
+          
+          ⚡ El sistema ahora escalará automáticamente

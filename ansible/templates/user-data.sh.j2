@@ -1,119 +1,91 @@
 #!/bin/bash
-set -x  # 👈 Para debugging
+set -x
 
-# Actualizar sistema
 yum update -y
 
-# Instalar dependencias
-yum install docker git -y
+yum install docker git stress-ng -y
 
-# Iniciar y habilitar Docker
 systemctl start docker
 systemctl enable docker
 usermod -a -G docker ec2-user
 
-# Instalar kubectl
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+# curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+# install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
-# Instalar k3s (Kubernetes lightweight)
-export INSTALL_K3S_EXEC="--write-kubeconfig-mode=644"
-curl -sfL https://get.k3s.io | sh -
+# # Instalar k3s (Kubernetes lightweight)
+# export INSTALL_K3S_EXEC="--write-kubeconfig-mode=644"
+# curl -sfL https://get.k3s.io | sh -
 
-# Configurar variables de entorno
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+# # Configurar variables de entorno
+# export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-# Esperar a que k3s esté listo
-echo "⏳ Esperando a que k3s esté listo..."
-for i in {1..30}; do
-    if kubectl get nodes 2>/dev/null; then
-        echo "✅ k3s está listo!"
-        break
-    fi
-    echo "⏱️ Intento $i/30 - Esperando k3s..."
-    sleep 10
-done
+# # Esperar a que k3s esté listo
+# echo "⏳ Esperando a que k3s esté listo..."
+# for i in {1..30}; do
+#     if kubectl get nodes 2>/dev/null; then
+#         echo "✅ k3s está listo!"
+#         break
+#     fi
+#     echo "⏱️ Intento $i/30 - Esperando k3s..."
+#     sleep 10
+# done
 
-# Configurar kubectl para el usuario ec2-user
-mkdir -p /home/ec2-user/.kube
-cp /etc/rancher/k3s/k3s.yaml /home/ec2-user/.kube/config
-chown -R ec2-user:ec2-user /home/ec2-user/.kube
+# # Configurar kubectl para el usuario ec2-user
+# mkdir -p /home/ec2-user/.kube
+# cp /etc/rancher/k3s/k3s.yaml /home/ec2-user/.kube/config
+# chown -R ec2-user:ec2-user /home/ec2-user/.kube
 
-# Clonar tu proyecto (¡REEMPLAZA CON TU URL REAL!)
 cd /home/ec2-user
-echo "📦 Clonando el repositorio..."
 git clone {{ git_repo }}
 chown -R ec2-user:ec2-user CC-Contenedores
 
-# Construir imágenes Docker
 cd CC-Contenedores
 
-echo "🐳 Construyendo imagen del backend..."
+echo "🐳 Construyendo imagen del la app..."
 docker build -t cc_contenedores-backend:latest ./backend
-
-echo "🐳 Construyendo imagen del frontend..."
 docker build -t cc_contenedores-frontend:latest ./frontend
-
-echo "🐳 Construyendo imagen de la base de datos..."
 docker build -t cc_contenedores-db:latest ./db
 
-# Importar imágenes en k3s
-echo "📥 Importando imágenes en k3s..."
-docker save cc_contenedores-backend:latest | sudo k3s ctr images import - || echo "⚠️  Error importando backend, continuando..."
-docker save cc_contenedores-frontend:latest | sudo k3s ctr images import - || echo "⚠️  Error importando frontend, continuando..."
-docker save cc_contenedores-db:latest | sudo k3s ctr images import - || echo "⚠️  Error importando db, continuando..."
+# echo "📥 Importando imágenes en k3s..."
+# docker save cc_contenedores-backend:latest | sudo k3s ctr images import - || echo "⚠️  Error importando backend, continuando..."
+# docker save cc_contenedores-frontend:latest | sudo k3s ctr images import - || echo "⚠️  Error importando frontend, continuando..."
+# docker save cc_contenedores-db:latest | sudo k3s ctr images import - || echo "⚠️  Error importando db, continuando..."
 
-# Listar imágenes en k3s para verificar
-echo "📋 Imágenes disponibles en k3s:"
-sudo k3s ctr images list | grep cc_contenedores || echo "❌ No se encontraron imágenes cc_contenedores"
+# # Listar imágenes en k3s para verificar
+# echo "📋 Imágenes disponibles en k3s:"
+# sudo k3s ctr images list | grep cc_contenedores || echo "❌ No se encontraron imágenes cc_contenedores"
 
-# Ejecutar el script de despliegue original (que ahora aplicará los HPA)
-echo "🚀 Ejecutando deploy.sh original..."
-chmod +x deploy.sh
+# # Ejecutar el script de despliegue original (que ahora aplicará los HPA)
+# echo "🚀 Ejecutando deploy.sh original..."
+# chmod +x deploy.sh
 
-# Verificar si el deploy.sh incluye los HPA, si no, los aplicamos después
-if grep -q "hpa" deploy.sh || grep -q "autoscaling" deploy.sh; then
-    echo "✅ deploy.sh incluye HPA, ejecutando normalmente..."
-    sudo -u ec2-user ./deploy.sh
-else
-    echo "⚠️  deploy.sh no incluye HPA, ejecutando y luego aplicando HPA..."
-    sudo -u ec2-user ./deploy.sh
+# # Verificar si el deploy.sh incluye los HPA, si no, los aplicamos después
+# if grep -q "hpa" deploy.sh || grep -q "autoscaling" deploy.sh; then
+#     echo "✅ deploy.sh incluye HPA, ejecutando normalmente..."
+#     sudo -u ec2-user ./deploy.sh
+# else
+#     echo "⚠️  deploy.sh no incluye HPA, ejecutando y luego aplicando HPA..."
+#     sudo -u ec2-user ./deploy.sh
     
-    # Aplicar los HPA desde tus archivos
-    echo "📈 Aplicando HPA desde archivos YAML..."
-    sudo -u ec2-user kubectl apply -f k8s/backend-hpa.yaml
-    sudo -u ec2-user kubectl apply -f k8s/frontend-hpa.yaml
-fi
+#     # Aplicar los HPA desde tus archivos
+#     echo "📈 Aplicando HPA desde archivos YAML..."
+#     sudo -u ec2-user kubectl apply -f k8s/backend-hpa.yaml
+#     sudo -u ec2-user kubectl apply -f k8s/frontend-hpa.yaml
+# fi
 
-# Verificar el despliegue
-echo "📊 Verificando despliegue..."
-sudo -u ec2-user kubectl get pods
-sudo -u ec2-user kubectl get hpa
+# # Verificar el despliegue
+# echo "📊 Verificando despliegue..."
+# sudo -u ec2-user kubectl get pods
+# sudo -u ec2-user kubectl get hpa
+
+docker run -d --name database -p 5432:5432 db:latest
+docker run -d --name backend -p 3000:3000 --link database:database backend:latest
+docker run -d --name frontend -p 80:80 --link backend:backend frontend:latest
 
 # Información de acceso
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
-echo ""
-echo "🎉 🎉 🎉 DESPLIEGUE COMPLETADO! 🎉 🎉 🎉"
-echo "=========================================="
-echo "🌐 IP Pública: $PUBLIC_IP"
-echo ""
-echo "📊 Estado de la aplicación:"
-sudo -u ec2-user kubectl get pods -o wide
-echo ""
-echo "📈 Autoscalers configurados:"
-sudo -u ec2-user kubectl get hpa
-echo ""
-echo "🔍 Para ver logs:"
-echo "   kubectl logs -f deployment/backend"
-echo ""
-echo "🌍 Para acceder a tu aplicación:"
-echo "   Frontend: http://$PUBLIC_IP"
-echo "   Backend:  http://$PUBLIC_IP/api"
-echo ""
-echo "💡 Para configurar acceso local:"
-echo "   echo '$PUBLIC_IP miapp.local' | sudo tee -a /etc/hosts"
-echo "   Luego accede en: http://miapp.local"
-echo ""
-echo "🔄 Para probar el autoscaling:"
-echo "   kubectl run -it --rm load-test --image=busybox -- /bin/sh -c 'while true; do wget -q -O- http://backend-service:3000; done'"
+echo "🎉 APLICACIÓN DESPLEGADA!"
+echo "🌐 Frontend: http://$PUBLIC_IP"
+echo "🔗 Backend: http://$PUBLIC_IP:3000"
+echo "📊 Para probar carga: stress-ng --cpu 2 --timeout 60"

@@ -1,0 +1,187 @@
+---
+- name: 🧪 Demostrar Auto Scaling Automático
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_name: "cc-contenedores"
+    aws_region: "us-east-1"
+
+  tasks:
+    - name: 📊 Estado INICIAL del Auto Scaling
+      amazon.aws.autoscaling_group_info:
+        name: "{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+      register: estado_inicial
+
+    - name: 🖨️ Mostrar estado inicial
+      debug:
+        msg: |
+          🎯 ESTADO INICIAL DEL AUTO SCALING:
+          - Instancias: {{ estado_inicial.results[0].instances | length }}
+          - Desired Capacity: {{ estado_inicial.results[0].desired_capacity }}
+          - Máximo: {{ estado_inicial.results[0].max_size }}
+          {% for instance in estado_inicial.results[0].instances %}
+          - {{ instance.instance_id }} ({{ instance.lifecycle_state }})
+          {% endfor %}
+
+    - name: 🎯 Verificar que hay capacidad para escalar
+      debug:
+        msg: |
+          📈 CAPACIDAD DE ESCALADO:
+          - Instancias actuales: {{ estado_inicial.results[0].instances | length }}
+          - Límite máximo: {{ estado_inicial.results[0].max_size }}
+          - Puede crear hasta {{ estado_inicial.results[0].max_size - estado_inicial.results[0].instances | length }} instancias más
+      when: estado_inicial.results[0].instances | length < estado_inicial.results[0].max_size
+
+    - name: 🎯 Obtener una instancia EXISTENTE del ASG para generar carga
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:aws:autoscaling:groupName": "{{ project_name }}-asg"
+          "instance-state-name": "running"
+      register: instancias_asg
+
+    - name: 🚀 Generar carga de CPU en instancia EXISTENTE del ASG
+      block:
+        - name: 🔍 Verificar que tenemos instancias del ASG
+          debug:
+            msg: "📡 Usando instancia del ASG: {{ instancias_asg.instances[0].instance_id }}"
+
+        - name: 📝 Instalar y ejecutar stress-ng via User Data (modificando LT)
+          amazon.aws.ec2_launch_template:
+            name: "{{ project_name }}-template"
+            region: "{{ aws_region }}"
+            image_id: "ami-0c02fb55956c7d316"
+            instance_type: "t3.micro"
+            key_name: "mi-keypair"
+            security_group_ids:
+              - "{{ security_group_id }}"
+            user_data: |
+              #!/bin/bash
+              echo "🎯 INICIANDO PRUEBA DE CARGA DE CPU..."
+              sudo yum update -y
+              sudo yum install -y stress-ng
+              echo "🔥 Generando 80% de carga de CPU por 5 minutos..."
+              nohup sudo stress-ng --cpu 2 --timeout 300 > /tmp/stress.log 2>&1 &
+              echo "✅ Carga de CPU iniciada - Auto Scaling debería activarse"
+              ps aux | grep stress-ng
+            block_device_mappings:
+              - device_name: /dev/xvda
+                ebs:
+                  volume_size: 8
+                  volume_type: gp2
+            tags:
+              Project: "{{ project_name }}"
+
+        - name: 🔄 Forzar replacement de una instancia del ASG
+          amazon.aws.autoscaling_group:
+            name: "{{ project_name }}-asg"
+            region: "{{ aws_region }}"
+            replace_all_instances: true
+            replace_batch_size: 1
+            wait_for_instances: false
+
+      when: instancias_asg.instances | length > 0
+
+    - name: 🚀 Generar carga de CPU usando User Data en nueva instancia
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        key_name: "mi-keypair"
+        instance_type: "t3.micro"
+        image_id: "ami-0c02fb55956c7d316"
+        security_group: "cc-contenedores-sg"
+        vpc_subnet_id: "subnet-023c79b9799a5727d"
+        user_data: |
+          #!/bin/bash
+          echo "🎯 INICIANDO PRUEBA DE CARGA DE CPU..."
+          sudo yum update -y
+          sudo yum install -y stress-ng
+          echo "🔥 Generando 80% de carga de CPU por 10 minutos..."
+          nohup sudo stress-ng --cpu 2 --timeout 600 > /tmp/stress.log 2>&1 &
+          echo "✅ Carga de CPU iniciada - Esto activará el Auto Scaling"
+          ps aux | grep stress-ng
+        wait: yes
+        count: 1
+        tags:
+          Name: "test-carga-cpu"
+          Project: "{{ project_name }}"
+          Test: "auto-scaling-demo"
+      register: nueva_instancia_carga
+
+    - name: 📝 Información de la instancia de carga
+      debug:
+        msg: |
+          🔥 INSTANCIA DE CARGA CREADA:
+          - ID: {{ nueva_instancia_carga.instances[0].instance_id }}
+          - IP: {{ nueva_instancia_carga.instances[0].public_ip_address }}
+          - Estado: {{ nueva_instancia_carga.instances[0].state.name }}
+
+    - name: ⏳ Esperar a que CloudWatch detecte la métrica (3-4 minutos)
+      pause:
+        minutes: 4
+        prompt: "⏰ Esperando a que CloudWatch detecte la carga alta de CPU (puede tomar 3-4 minutos)..."
+
+    - name: 📈 Monitorear actividades de escalado
+      amazon.aws.autoscaling_group_info:
+        name: "{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+      register: estado_intermedio
+      until: estado_intermedio.results[0].instances | length > estado_inicial.results[0].instances | length
+      retries: 10
+      delay: 30
+
+    - name: 🎉 Mostrar resultado del escalado
+      debug:
+        msg: |
+          {% set instancias_inicial = estado_inicial.results[0].instances | length %}
+          {% set instancias_actual = estado_intermedio.results[0].instances | length %}
+          {% if instancias_actual > instancias_inicial %}
+          ✅ ¡AUTO SCALING AUTOMÁTICO FUNCIONANDO!
+          
+          🎯 RESULTADO:
+          - Instancias INICIALES: {{ instancias_inicial }}
+          - Instancias ACTUALES: {{ instancias_actual }}
+          - ¡Se crearon {{ instancias_actual - instancias_inicial }} instancias AUTOMÁTICAMENTE!
+          
+          📈 Métrica activadora: CPU > 50% por 2 minutos
+          🔥 Causa: Carga de CPU generada por stress-ng
+          ⚡ Respuesta: Auto Scaling detectó y creó nueva instancia
+          
+          {% else %}
+          ⚠️  El Auto Scaling no activó automáticamente después de 5 minutos
+          - Instancias iniciales: {{ instancias_inicial }}
+          - Instancias actuales: {{ instancias_actual }}
+          - Posibles causas:
+            * Las métricas de CloudWatch pueden tardar más
+            * El umbral de CPU (50%) no se alcanzó
+            * Verificar configuración de alarmas
+          {% endif %}
+
+    # - name: 🧹 Limpiar instancia de prueba (opcional)
+    #   amazon.aws.ec2_instance:
+    #     instance_ids: "{{ nueva_instancia_carga.instances[0].instance_id }}"
+    #     region: "{{ aws_region }}"
+    #     state: absent
+    #   when: nueva_instancia_carga.instances | length > 0
+
+    - name: 🔄 Restaurar configuración original del Auto Scaling
+      amazon.aws.autoscaling_group:
+        name: "{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+        max_size: 3
+        desired_capacity: 2
+
+    - name: 📋 Comandos para verificar manualmente
+      debug:
+        msg: |
+          🔍 PARA VERIFICAR MANUALMENTE:
+          
+          Ver estado actual:
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-name {{ project_name }}-asg --region {{ aws_region }}
+          
+          Ver actividades recientes:
+          aws autoscaling describe-scaling-activities --auto-scaling-group-name {{ project_name }}-asg --region {{ aws_region }} --max-items 5
+          
+          Ver alarmas de CloudWatch:
+          aws cloudwatch describe-alarms --alarm-name-prefix "high-cpu-{{ project_name }}" --region {{ aws_region }}
