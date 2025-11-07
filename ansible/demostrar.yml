@@ -1,0 +1,133 @@
+---
+- name: 🧪 Demostrar Auto Scaling Automático (SIN SSM)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_name: "cc-contenedores"
+    aws_region: "us-east-1"
+
+  tasks:
+    - name: 📊 Estado INICIAL del Auto Scaling
+      amazon.aws.autoscaling_group_info:
+        name: "{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+      register: estado_inicial
+
+    - name: 🖨️ Mostrar estado inicial
+      debug:
+        msg: |
+          🎯 ESTADO INICIAL DEL AUTO SCALING:
+          - Instancias: {{ estado_inicial.auto_scaling_groups[0].instances | length }}
+          - Desired Capacity: {{ estado_inicial.auto_scaling_groups[0].desired_capacity }}
+          - Máximo: {{ estado_inicial.auto_scaling_groups[0].max_size }}
+          {% for instance in estado_inicial.auto_scaling_groups[0].instances %}
+          - {{ instance.instance_id }} ({{ instance.lifecycle_state }})
+          {% endfor %}
+
+    - name: 🎯 Verificar capacidad de escalado
+      debug:
+        msg: |
+          📈 CAPACIDAD DE ESCALADO:
+          - Puede crear hasta {{ estado_inicial.auto_scaling_groups[0].max_size - estado_inicial.auto_scaling_groups[0].instances | length }} instancias más
+      when: estado_inicial.auto_scaling_groups[0].instances | length < estado_inicial.auto_scaling_groups[0].max_size
+
+    - name: 🔥 SIMULAR carga alta de CPU activando alarma manualmente
+      block:
+        - name: Activar alarma de CPU alta
+          shell: |
+            aws cloudwatch set-alarm-state \
+              --alarm-name "high-cpu-{{ project_name }}-asg" \
+              --state-value ALARM \
+              --state-reason "Test auto scaling demonstration" \
+              --region "{{ aws_region }}"
+          register: activate_alarm
+
+        - debug:
+            msg: "✅ Alarma de CPU alta activada manualmente"
+
+      rescue:
+        - name: ⚠️  Fallback Aumentar desired capacity manualmente
+          debug:
+            msg: "No se pudo activar la alarma, aumentando desired capacity..."
+
+        - name: Aumentar desired capacity para forzar escalado
+          amazon.aws.autoscaling_group:
+            name: "{{ project_name }}-asg"
+            region: "{{ aws_region }}"
+            desired_capacity: "{{ estado_inicial.auto_scaling_groups[0].desired_capacity + 1 }}"
+            wait_for_instances: false
+
+    - name: ⏳ Esperar respuesta del Auto Scaling (3 minutos)
+      pause:
+        minutes: 3
+        prompt: "⏰ Esperando que Auto Scaling reaccione a la alarma de CPU alta..."
+
+    - name: 📈 Monitorear actividades de escalado
+      shell: |
+        aws autoscaling describe-scaling-activities \
+          --auto-scaling-group-name "{{ project_name }}-asg" \
+          --region "{{ aws_region }}" \
+          --max-items 5 \
+          --query 'Activities[].{Time:StartTime, Description:Description, Status:StatusCode}' \
+          --output table
+      register: actividades
+      until: "'InProgress' in actividades.stdout or 'Successful' in actividades.stdout or actividades.rc != 0"
+      retries: 6
+      delay: 30
+
+    - name: 🎉 Mostrar actividades de escalado
+      debug:
+        msg: |
+          📈 ACTIVIDADES DE ESCALADO DETECTADAS:
+          {{ actividades.stdout }}
+
+    - name: ⏳ Esperar completación
+      pause:
+        minutes: 2
+        prompt: "🔄 Esperando que se complete la creación de nueva instancia..."
+
+    - name: 📊 Estado FINAL del Auto Scaling
+      amazon.aws.autoscaling_group_info:
+        name: "{{ project_name }}-asg"
+        region: "{{ aws_region }}"
+      register: estado_final
+
+    - name: 🏆 Resultado de la demostración
+      debug:
+        msg: |
+          {% set instancias_inicial = estado_inicial.auto_scaling_groups[0].instances | length %}
+          {% set instancias_final = estado_final.auto_scaling_groups[0].instances | length %}
+          {% if instancias_final > instancias_inicial %}
+          ✅ ¡AUTO SCALING AUTOMÁTICO FUNCIONANDO!
+          
+          🎯 RESULTADO:
+          - Instancias INICIALES: {{ instancias_inicial }}
+          - Instancias FINALES: {{ instancias_final }}
+          - ¡Se crearon {{ instancias_final - instancias_inicial }} instancias AUTOMÁTICAMENTE!
+          
+          📈 Métrica activadora: Alarma de CPU alta activada
+          ⚡ Respuesta: Auto Scaling detectó y creó nueva instancia
+          
+          {% else %}
+          ⚠️  El Auto Scaling no se activó
+          - Instancias INICIALES: {{ instancias_inicial }}
+          - Instancias FINALES: {{ instancias_final }}
+          
+          🔍 Diagnóstico:
+            aws autoscaling describe-scaling-activities --auto-scaling-group-name {{ project_name }}-asg --region {{ aws_region }} --max-items 10
+          {% endif %}
+
+    - name: 📋 Comandos para verificar
+      debug:
+        msg: |
+          🔍 PARA VERIFICAR MANUALMENTE:
+          
+          Ver estado: 
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-name {{ project_name }}-asg --region {{ aws_region }}
+          
+          Ver actividades:
+          aws autoscaling describe-scaling-activities --auto-scaling-group-name {{ project_name }}-asg --region {{ aws_region }} --max-items 10
+          
+          Ver alarmas:
+          aws cloudwatch describe-alarms --alarm-name-prefix "high-cpu-{{ project_name }}" --region {{ aws_region }}

@@ -234,17 +234,14 @@
     - name: 📈 Crear Auto Scaling Group
       amazon.aws.ec2_asg:
         name: "{{ project_name }}-asg"
-        availability_zones:
-          - "{{ aws_region }}a"
+        vpc_zone_identifier:
+          - "{{ subnet_id }}"
         launch_template:
           launch_template_name: "{{ project_name }}-template"
           version: "$Latest"
         min_size: "{{ min_size }}"
         max_size: "{{ max_size }}"
         desired_capacity: "{{ desired_capacity }}"
-        vpc_zone_identifier:
-          - "{{ subnet_id }}"
-        
         tags:
           - key: Name
             value: "{{ project_name }}-instance"
@@ -265,7 +262,7 @@
             adjustment_type: "ChangeInCapacity"
             scaling_adjustment: 1
             min_adjustment_step: 1
-            cooldown: 60
+            cooldown: 120
           register: scale_up_policy
 
         - name: 📉 Crear política de descenso por CPU baja

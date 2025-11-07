@@ -38,11 +38,11 @@
         namespace: "AWS/EC2"
         statistic: "Average"
         comparison: "GreaterThanOrEqualToThreshold"
-        threshold: 50.0
+        threshold: 75.0
         period: 60
         evaluation_periods: 2
         unit: "Percent"
-        description: "Escalar cuando CPU >= 50% por 2 minutos"
+        description: "Escalar cuando CPU >= 75% por 2 minutos"
         alarm_actions: 
           - "{{ scale_up_policy_arn }}"
         dimensions:
@@ -57,11 +57,11 @@
         namespace: "AWS/EC2"
         statistic: "Average"
         comparison: "LessThanThreshold"
-        threshold: 20.0
+        threshold: 40.0
         period: 300
         evaluation_periods: 2
         unit: "Percent"
-        description: "Reducir cuando CPU < 20% por 10 minutos"
+        description: "Reducir cuando CPU < 40% por 10 minutos"
         alarm_actions:
           - "{{ scale_down_policy_arn }}"
         dimensions:
@@ -75,9 +75,9 @@
           
           🔔 Alarmas de CloudWatch creadas:
           🔥 high-cpu-{{ project_name }}-asg 
-            - CPU >= 50% por 2 minutos → +1 instancia
+            - CPU >= 75% por 2 minutos → +1 instancia
           
           ❄️ low-cpu-{{ project_name }}-asg
-            - CPU < 20% por 10 minutos → -1 instancia
+            - CPU < 40% por 10 minutos → -1 instancia
           
           ⚡ El sistema ahora escalará automáticamente
