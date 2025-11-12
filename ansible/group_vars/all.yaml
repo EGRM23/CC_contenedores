@@ -6,11 +6,14 @@ k8s_namespace: "cc-contenedores"
 k8s_ingress_class: "nginx"
 
 # Imágenes Docker
-backend_image: "cc_contenedores-backend:latest"
-frontend_image: "cc_contenedores-frontend:latest"
-db_image: "cc_contenedores-db:latest"
+# backend_image: "cc_contenedores-backend:latest"
+# frontend_image: "cc_contenedores-frontend:latest"
+# db_image: "cc_contenedores-db:latest"
+backend_image: "nginx:alpine"
+frontend_image: "nginx:alpine"
+db_image: "mysql:8.0"
 
 # Recursos
-db_storage: "1Gi"
+db_storage: "500m"
 mysql_root_password: "rootpassword"
 mysql_database: "testdb"

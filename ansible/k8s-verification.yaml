@@ -19,11 +19,11 @@
     namespace: "{{ k8s_namespace }}"
   register: services_info
 
-- name: 🔍 Verificar ingress
-  kubernetes.core.k8s_info:
-    kind: Ingress
-    namespace: "{{ k8s_namespace }}"
-  register: ingress_info
+# - name: 🔍 Verificar ingress
+#   kubernetes.core.k8s_info:
+#     kind: Ingress
+#     namespace: "{{ k8s_namespace }}"
+#   register: ingress_info
 
 - name: ✅ Verificación completada
   debug:
@@ -31,4 +31,3 @@
       ✅ VERIFICACIÓN COMPLETADA:
       - Pods desplegados: {{ pods_info.resources | length }}
       - Servicios creados: {{ services_info.resources | length }}
-      - Ingress configurado: {{ ingress_info.resources | length > 0 }}

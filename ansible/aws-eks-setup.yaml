@@ -1,5 +1,45 @@
 ---
-- name: 🎯 Crear cluster EKS
+- name: 🛠️ Crear Launch Template para node group
+  community.aws.ec2_launch_template:
+    name: "eks-{{ eks_cluster_name }}-template"
+    region: "{{ aws_region }}"
+    network_interfaces:
+      - associate_public_ip_address: true
+        delete_on_termination: true
+        device_index: 0
+        groups:
+          - "{{ security_group_id }}"
+    instance_type: "{{ eks_instance_type }}"
+    key_name: "{{ key_name }}"
+    tag_specifications:
+      - resource_type: instance
+        tags:
+          Name: "eks-{{ eks_cluster_name }}-node"
+          Project: "{{ project_name }}"
+          "eks:cluster-name": "{{ eks_cluster_name }}"
+          "eks:nodegroup-name": "{{ eks_nodegroup_name }}"
+    tags:
+      Name: "eks-{{ eks_cluster_name }}-template"
+      Project: "{{ project_name }}"
+      "eks:cluster-name": "{{ eks_cluster_name }}"
+  register: launch_template
+  ignore_errors: yes
+
+- name: 📋 Verificar creación del Launch Template
+  debug:
+    msg: "Launch Template: {{ launch_template.launch_template.launch_template_id | default('Usando default de EKS') }}"
+
+- name: 🔍 Verificar si el cluster EKS ya existe (usando shell)
+  shell: |
+    aws eks describe-cluster \
+      --name "{{ eks_cluster_name }}" \
+      --region "{{ aws_region }}" \
+      --query 'cluster.status' \
+      --output text 2>/dev/null || echo "NOT_FOUND"
+  register: cluster_check
+  ignore_errors: yes
+
+- name: 🎯 Crear cluster EKS (solo si no existe)
   community.aws.eks_cluster:
     name: "{{ eks_cluster_name }}"
     version: "{{ eks_version }}"
@@ -11,42 +51,47 @@
     wait: yes
     wait_timeout: 1800
   register: eks_cluster
+  when: cluster_check.stdout == "NOT_FOUND"
 
-- name: 🔍 DEBUG - Ver estructura de eks_cluster
-  debug:
-    var: eks_cluster
-
-- name: 📝 Guardar información del cluster
-  set_fact:
-    eks_cluster_endpoint: "{{ eks_cluster.endpoint }}"
-    eks_cluster_ca: "{{ eks_cluster.certificate_authority.data }}"
-
-- name: 🧹 Limpiar node group existente si está en estado fallido
+- name: 📝 Obtener información del cluster existente
   shell: |
-    aws eks delete-nodegroup \
-      --cluster-name "{{ eks_cluster_name }}" \
-      --nodegroup-name "{{ eks_nodegroup_name }}" \
-      --region "{{ aws_region }}" 2>/dev/null || echo "No existe o ya fue eliminado"
-  ignore_errors: yes
-  register: cleanup_nodegroup
+    aws eks describe-cluster \
+      --name "{{ eks_cluster_name }}" \
+      --region "{{ aws_region }}" \
+      --query 'cluster.{endpoint:endpoint, ca:certificateAuthority.data}' \
+      --output json
+  register: existing_cluster_info
+  when: cluster_check.stdout != "NOT_FOUND"
 
-- name: ⏳ Esperar eliminación de node group anterior
-  pause:
-    minutes: 2
-    prompt: "Esperando que se elimine el node group anterior..."
-  when: cleanup_nodegroup is defined
+- name: 📝 Configurar información del cluster
+  set_fact:
+    eks_cluster_endpoint: "{{ (existing_cluster_info.stdout | from_json).endpoint if cluster_check.stdout != 'NOT_FOUND' else eks_cluster.endpoint }}"
+    eks_cluster_ca: "{{ (existing_cluster_info.stdout | from_json).ca if cluster_check.stdout != 'NOT_FOUND' else eks_cluster.certificate_authority.data }}"
 
-- name: 📝 Crear node group
+- name: 🔍 DIAGNÓSTICO PREVIO - Verificar configuración
+  debug:
+    msg: |
+      CONFIGURACIÓN ACTUAL:
+      - Cluster: {{ eks_cluster_name }}
+      - Node Group: {{ eks_nodegroup_name }}
+      - Subnets: {{ subnet_ids | length }} subnets
+      - Security Group: {{ security_group_id }}
+      - Instance Type: {{ eks_instance_type }} (EN Launch Template)
+      - Node Role: {{ eks_nodegroup_role_arn }}
+      - Scaling: desired={{ eks_desired_size }}, min={{ eks_min_size }}, max={{ eks_max_size }}
+      - Key Pair: {{ key_name }} (EN Launch Template)
+      - Launch Template: eks-{{ eks_cluster_name }}-template
+      - Cluster Status: {{ cluster_check.stdout }}
+
+- name: 📝 Crear node group CON LAUNCH TEMPLATE
   community.aws.eks_nodegroup:
     cluster_name: "{{ eks_cluster_name }}"
     name: "{{ eks_nodegroup_name }}"
     subnets: "{{ subnet_ids }}"
-    instance_types:
-      - "{{ eks_instance_type }}"
     node_role: "{{ eks_nodegroup_role_arn }}"
-    remote_access:
-      ec2_ssh_key: "{{ key_name }}"
-      source_sg: "{{ security_group_id }}"
+    launch_template:
+      name: "eks-{{ eks_cluster_name }}-template"
+      version: "1"
     scaling_config:
       desired_size: "{{ eks_desired_size }}"
       min_size: "{{ eks_min_size }}"
@@ -55,12 +100,41 @@
     wait: yes
     wait_timeout: 600
   register: eks_nodegroup
+  when: cluster_check.stdout != "NOT_FOUND"
 
-- name: ✅ Confirmar creación del cluster
+- name: ✅ Confirmar creación del node group
   debug:
     msg: |
-      ✅ Cluster EKS creado exitosamente:
-      - Nombre: {{ eks_cluster_name }}
-      - Endpoint: {{ eks_cluster_endpoint }}
+      ✅ NODE GROUP CREADO EXITOSAMENTE CON LAUNCH TEMPLATE:
+      - Cluster: {{ eks_cluster_name }}
       - Node Group: {{ eks_nodegroup_name }}
-      - Estado: {{ eks_cluster.cluster.status }}
+      - Launch Template: eks-{{ eks_cluster_name }}-template
+      - Security Group: {{ security_group_id }}
+      - Estado: {{ eks_nodegroup.nodegroup.status | default('CREANDOSE') }}
+      - ¡Forzado el uso exclusivo de tu Security Group!
+
+- name: 🔍 Verificar Security Groups del node group (después de crear)
+  shell: |
+    # Esperar a que el node group esté activo y verificar SGs
+    sleep 60  # Esperar inicialización
+    INSTANCE_ID=$(aws ec2 describe-instances \
+      --region "{{ aws_region }}" \
+      --filters "Name=tag:eks:nodegroup-name,Values={{ eks_nodegroup_name }}" \
+      --query 'Reservations[0].Instances[0].InstanceId' \
+      --output text 2>/dev/null || echo "")
+    
+    if [ -n "$INSTANCE_ID" ]; then
+      aws ec2 describe-instances \
+        --region "{{ aws_region }}" \
+        --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' \
+        --output text
+    else
+      echo "Instancia no encontrada aún"
+    fi
+  register: nodegroup_sg_verify
+  when: eks_nodegroup is defined
+
+- debug:
+    msg: "Security Groups de la instancia: {{ nodegroup_sg_verify.stdout }}"
+  when: nodegroup_sg_verify is defined

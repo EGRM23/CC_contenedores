@@ -26,6 +26,7 @@
         resources:
           requests:
             storage: "{{ db_storage }}"
+  when: false
 
 - name: 🗄️ Desplegar Base de Datos MySQL
   kubernetes.core.k8s:
@@ -64,20 +65,22 @@
                         key: mysql-database
                 ports:
                   - containerPort: 3306
-                volumeMounts:
-                  - name: mysql-storage
-                    mountPath: /var/lib/mysql
+                # volumeMounts:
+                #   - name: mysql-storage
+                #     mountPath: /var/lib/mysql
                 resources:
                   requests:
-                    cpu: 200m
-                    memory: 512Mi
+                    cpu: 100m
+                    memory: 256Mi
                   limits:
-                    cpu: 1000m
-                    memory: 1Gi
-            volumes:
-              - name: mysql-storage
-                persistentVolumeClaim:
-                  claimName: mysql-pvc
+                    cpu: 500m
+                    memory: 512Mi
+            # volumes:
+            #   - name: mysql-storage
+            #     persistentVolumeClaim:
+            #       claimName: mysql-pvc
+            restartPolicy: Always  # ✅ AGREGADO
+
 
 - name: 🌐 Servicio para Base de Datos
   kubernetes.core.k8s:
@@ -105,7 +108,7 @@
         labels:
           app: backend
       spec:
-        replicas: 2
+        replicas: 1
         selector:
           matchLabels:
             app: backend
@@ -127,6 +130,7 @@
                   limits:
                     cpu: 500m
                     memory: 512Mi
+            restartPolicy: Always
 
 - name: 🌐 Servicio para Backend
   kubernetes.core.k8s:
@@ -137,11 +141,13 @@
         name: backend
         namespace: "{{ k8s_namespace }}"
       spec:
+        type: NodePort
         selector:
           app: backend
         ports:
           - port: 3000
             targetPort: 3000
+            nodePort: 30081
 
 - name: 🎨 Desplegar Frontend
   kubernetes.core.k8s:
@@ -154,7 +160,7 @@
         labels:
           app: frontend
       spec:
-        replicas: 2
+        replicas: 1
         selector:
           matchLabels:
             app: frontend
@@ -176,6 +182,7 @@
                   limits:
                     cpu: 500m
                     memory: 512Mi
+            restartPolicy: Always
 
 - name: 🌐 Servicio para Frontend
   kubernetes.core.k8s:

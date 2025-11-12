@@ -1,0 +1,190 @@
+---
+- name: 🧹 Limpieza Completa - Cluster EKS y Recursos
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    cluster_name: "cc-contenedores-cluster"
+    nodegroup_name: "cc-contenedores-nodes"
+    aws_region: "us-east-1"
+    k8s_namespace: "cc-contenedores"
+
+  tasks:
+    - name: 📊 Estado inicial
+      debug:
+        msg: "🔄 INICIANDO LIMPIEZA COMPLETA DEL CLUSTER EKS"
+
+    - name: 🔍 Verificar que el cluster existe
+      shell: |
+        aws eks describe-cluster \
+          --name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'cluster.status' \
+          --output text 2>/dev/null || echo "NOT_FOUND"
+      register: cluster_status
+      ignore_errors: yes
+
+    - name: 📋 Mostrar estado del cluster
+      debug:
+        msg: "Estado del cluster '{{ cluster_name }}': {{ cluster_status.stdout }}"
+
+    - name: 🔍 Verificar node groups existentes
+      shell: |
+        aws eks list-nodegroups \
+          --cluster-name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'nodegroups' \
+          --output table 2>/dev/null || echo "NO_NODEGROUPS"
+      register: existing_nodegroups
+      ignore_errors: yes
+
+    - debug:
+        var: existing_nodegroups.stdout
+
+    - name: 🗑️ Eliminar node group (si existe)
+      shell: |
+        aws eks delete-nodegroup \
+          --cluster-name "{{ cluster_name }}" \
+          --nodegroup-name "{{ nodegroup_name }}" \
+          --region "{{ aws_region }}" \
+          --no-cli-pager
+      register: delete_nodegroup
+      ignore_errors: yes
+      when: cluster_status.stdout != "NOT_FOUND"
+
+    - name: ⏳ Esperar eliminación del node group (con timeout)
+      shell: |
+        echo "⏳ Esperando eliminación del node group (máximo 30 minutos)..."
+        TIMEOUT=1800  # 30 minutos
+        START_TIME=$(date +%s)
+        
+        while true; do
+          CURRENT_TIME=$(date +%s)
+          ELAPSED=$((CURRENT_TIME - START_TIME))
+          
+          if [ $ELAPSED -gt $TIMEOUT ]; then
+            echo "❌ TIMEOUT: Node group no se eliminó en 30 minutos"
+            exit 1
+          fi
+          
+          STATUS=$(aws eks describe-nodegroup \
+            --cluster-name "{{ cluster_name }}" \
+            --nodegroup-name "{{ nodegroup_name }}" \
+            --region "{{ aws_region }}" \
+            --query 'nodegroup.status' \
+            --output text 2>/dev/null || echo "DELETED")
+          
+          echo "Estado node group: $STATUS - Tiempo transcurrido: ${ELAPSED}s"
+          
+          if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "NOT_FOUND" ]; then
+            echo "✅ Node group eliminado exitosamente"
+            exit 0
+          fi
+          sleep 30
+        done
+      register: wait_nodegroup
+      async: 2100  # 35 minutos (un poco más del timeout)
+      poll: 0
+      when: 
+        - cluster_status.stdout != "NOT_FOUND"
+        - delete_nodegroup is defined
+        - delete_nodegroup.rc == 0
+
+    - name: 📊 Verificar resultado eliminación node group
+      debug:
+        msg: |
+          Resultado eliminación node group:
+          - Comando eliminación: {{ delete_nodegroup.rc | default('NO_EJECUTADO') }}
+          - Monitoreo: {{ wait_nodegroup.rc | default('NO_INICIADO') }}
+      when: cluster_status.stdout != "NOT_FOUND"
+
+    - name: 🗑️ Eliminar cluster EKS (si existe)
+      shell: |
+        aws eks delete-cluster \
+          --name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --no-cli-pager
+      register: delete_cluster
+      ignore_errors: yes
+      when: cluster_status.stdout != "NOT_FOUND"
+
+    - name: ⏳ Esperar eliminación del cluster (con timeout)
+      shell: |
+        echo "⏳ Esperando eliminación del cluster (máximo 40 minutos)..."
+        TIMEOUT=2400  # 40 minutos
+        START_TIME=$(date +%s)
+        
+        while true; do
+          CURRENT_TIME=$(date +%s)
+          ELAPSED=$((CURRENT_TIME - START_TIME))
+          
+          if [ $ELAPSED -gt $TIMEOUT ]; then
+            echo "❌ TIMEOUT: Cluster no se eliminó en 40 minutos"
+            exit 1
+          fi
+          
+          STATUS=$(aws eks describe-cluster \
+            --name "{{ cluster_name }}" \
+            --region "{{ aws_region }}" \
+            --query 'cluster.status' \
+            --output text 2>/dev/null || echo "DELETED")
+          
+          echo "Estado cluster: $STATUS - Tiempo transcurrido: ${ELAPSED}s"
+          
+          if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "NOT_FOUND" ]; then
+            echo "✅ Cluster eliminado exitosamente"
+            exit 0
+          fi
+          sleep 30
+        done
+      register: wait_cluster
+      async: 2700  # 45 minutos (un poco más del timeout)
+      poll: 0
+      when: 
+        - cluster_status.stdout != "NOT_FOUND"
+        - delete_cluster is defined
+        - delete_cluster.rc == 0
+
+    - name: 📊 Verificar resultado eliminación cluster
+      debug:
+        msg: |
+          Resultado eliminación cluster:
+          - Comando eliminación: {{ delete_cluster.rc | default('NO_EJECUTADO') }}
+          - Monitoreo: {{ wait_cluster.rc | default('NO_INICIADO') }}
+      when: cluster_status.stdout != "NOT_FOUND"
+
+    - name: 🧹 Limpiar recursos Kubernetes locales
+      shell: |
+        echo "🧹 Limpiando configuración local de kubectl..."
+        kubectl config delete-cluster "{{ cluster_name }}" 2>/dev/null || echo "⚠️ Cluster config no existe"
+        kubectl config delete-context "{{ cluster_name }}" 2>/dev/null || echo "⚠️ Context no existe"
+        kubectl config unset users.{{ cluster_name }} 2>/dev/null || echo "⚠️ User config no existe"
+        echo "✅ Configuración local de kubectl limpiada"
+      ignore_errors: yes
+
+    - name: 🔍 Verificación final
+      shell: |
+        echo "=== VERIFICACIÓN FINAL ==="
+        echo "Clusters EKS existentes:"
+        aws eks list-clusters --region "{{ aws_region }}" --query 'clusters' --output table 2>/dev/null || echo "No hay clusters"
+        echo ""
+        echo "Node Groups en '{{ cluster_name }}':"
+        aws eks list-nodegroups --cluster-name "{{ cluster_name }}" --region "{{ aws_region }}" --query 'nodegroups' --output table 2>/dev/null || echo "No hay node groups"
+      register: final_check
+
+    - debug:
+        var: final_check.stdout
+
+    - name: ✅ Resumen de limpieza
+      debug:
+        msg: |
+          🎉 PROCESO DE LIMPIEZA COMPLETADO
+          
+          📊 RESULTADO:
+          - Cluster: {{ cluster_name }}
+          - Estado inicial: {{ cluster_status.stdout }}
+          - Eliminación node group: {{ delete_nodegroup.rc | default('NO_EJECUTADO') }}
+          - Eliminación cluster: {{ delete_cluster.rc | default('NO_EJECUTADO') }}
+          
+          💡 Nota: La eliminación física puede continuar en segundo plano en AWS.
+          💡 Verifica en la consola AWS en unos minutos.

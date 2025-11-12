@@ -1,10 +1,8 @@
 ---
-- name: 🌐 Obtener información del Load Balancer
+- name: 🔍 Obtener información de los nodos
   kubernetes.core.k8s_info:
-    kind: Service
-    namespace: ingress-nginx
-    name: nginx-ingress-ingress-nginx-controller
-  register: lb_info
+    kind: Node
+  register: nodes_info
 
 - name: 🎉 Mostrar información de acceso
   debug:
@@ -14,28 +12,35 @@
       ✅ RECURSOS CREADOS:
       - Cluster EKS: {{ eks_cluster_name }}
       - Namespace: {{ k8s_namespace }}
-      - Pods: 5 (db, backend ×2, frontend ×2)
-      - Servicios: 3
-      - Ingress: 1
+      - Pods: 5 (db, backend x2, frontend x2)
+      - Servicios: 3 (2 NodePort, 1 ClusterIP)
 
-      🌐 INFORMACIÓN DE ACCESO:
-      {% if lb_info.resources[0].status.loadBalancer.ingress %}
-      - Load Balancer: {{ lb_info.resources[0].status.loadBalancer.ingress[0].hostname }}
-      - Frontend: http://{{ lb_info.resources[0].status.loadBalancer.ingress[0].hostname }}
-      - Backend API: http://{{ lb_info.resources[0].status.loadBalancer.ingress[0].hostname }}/api
+      🌐 INFORMACIÓN DE ACCESO (NodePort):
+      {% if nodes_info.resources %}
+      - Nodo: {{ nodes_info.resources[0].status.addresses[0].address }}
+      - Frontend: http://{{ nodes_info.resources[0].status.addresses[0].address }}:30080
+      - Backend API: http://{{ nodes_info.resources[0].status.addresses[0].address }}:30081
       {% else %}
-      - Load Balancer: Configurándose... (puede tomar unos minutos)
+      - Nodos: Obteniendo información...
       {% endif %}
 
       🔧 COMANDOS ÚTILES:
       - Ver pods: kubectl get pods -n {{ k8s_namespace }}
       - Ver servicios: kubectl get svc -n {{ k8s_namespace }}
-      - Ver logs backend: kubectl logs -l app=backend -n {{ k8s_namespace }}
-      - Acceso a base de datos: kubectl exec -it deployment/db -n {{ k8s_namespace }} -- mysql -u root -p
+      - Ver nodos: kubectl get nodes -o wide
+      - Port-forward temporal: kubectl port-forward -n {{ k8s_namespace }} service/frontend 8080:80
+
+      🎯 ACCESO RÁPIDO:
+      # Port-forward para desarrollo
+      kubectl port-forward -n {{ k8s_namespace }} service/frontend 8080:80 &
+      kubectl port-forward -n {{ k8s_namespace }} service/backend 8081:3000 &
+      # Luego acceder a:
+      # Frontend: http://localhost:8080
+      # Backend: http://localhost:8081
 
       📈 PARA ESCALAR:
       - Backend: kubectl scale deployment/backend --replicas=3 -n {{ k8s_namespace }}
       - Frontend: kubectl scale deployment/frontend --replicas=3 -n {{ k8s_namespace }}
 
       🗑️ PARA LIMPIAR:
-      - Ejecutar: ansible-playbook -i inventory.yaml limpieza.yml
+      - Ejecutar: ansible-playbook -i inventory.yaml cleanup/cleanup-nodegroup.yaml

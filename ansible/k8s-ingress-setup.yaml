@@ -1,59 +1,160 @@
 ---
-- name: 📦 Instalar Nginx Ingress Controller
-  kubernetes.core.helm:
-    name: nginx-ingress
-    namespace: ingress-nginx
-    chart_ref: ingress-nginx/ingress-nginx
-    chart_repo_url: https://kubernetes.github.io/ingress-nginx
-    release_values:
-      controller:
-        service:
-          type: LoadBalancer
-        publishService:
-          enabled: true
+- name: 🔧 Configurar kubectl para el cluster EKS
+  shell: |
+    aws eks update-kubeconfig \
+      --name {{ eks_cluster_name }} \
+      --region {{ aws_region }}
+  register: kubeconfig
+  
+- debug:
+    var: kubeconfig.stdout
 
-- name: ⏳ Esperar que LoadBalancer esté listo
-  kubernetes.core.k8s_info:
-    kind: Service
-    namespace: ingress-nginx
-    name: nginx-ingress-ingress-nginx-controller
-  register: ingress_service
-  until: ingress_service.resources[0].status.loadBalancer.ingress is defined
-  retries: 12
-  delay: 10
+- name: 🔍 Verificar estado del cluster EKS
+  shell: |
+    aws eks describe-cluster \
+      --name cc-contenedores-cluster \
+      --region us-east-1 \
+      --query 'cluster.status' \
+      --output text
+  register: cluster_status
+  
+- debug:
+    var: cluster_status.stdout
 
-- name: 🌐 Crear Ingress para la aplicación
-  kubernetes.core.k8s:
-    definition:
-      apiVersion: networking.k8s.io/v1
-      kind: Ingress
-      metadata:
-        name: app-ingress
-        namespace: "{{ k8s_namespace }}"
-        annotations:
-          nginx.ingress.kubernetes.io/rewrite-target: /$2
-          nginx.ingress.kubernetes.io/use-regex: "true"
-      spec:
-        ingressClassName: nginx
-        rules:
-        - host: "{{ project_name }}.local"
-          http:
-            paths:
-            - path: /
-              pathType: Prefix
-              backend:
-                service:
-                  name: frontend
-                  port:
-                    number: 80
-            - path: /api(/|$)(.*)
-              pathType: ImplementationSpecific
-              backend:
-                service:
-                  name: backend
-                  port:
-                    number: 3000
+- name: 🔍 Verificar nodos disponibles
+  shell: |
+    kubectl get nodes -o wide
+  register: nodes_status
 
-- name: 📝 Obtener URL del LoadBalancer
-  set_fact:
-    load_balancer_hostname: "{{ ingress_service.resources[0].status.loadBalancer.ingress[0].hostname }}"
+- debug:
+    var: nodes_status.stdout
+
+- name: 🔗 Agregar repositorio Helm de Nginx Ingress
+  shell: |
+    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+    helm repo update
+  register: helm_repo
+  ignore_errors: yes
+
+- debug:
+    var: helm_repo.stdout
+
+- name: 🧹 Limpiar instalación previa de ingress (si existe)
+  shell: |
+    helm uninstall nginx-ingress -n ingress-nginx 2>/dev/null || echo "No existía previa instalación"
+    kubectl delete namespace ingress-nginx --wait=false 2>/dev/null || echo "Namespace no existe"
+  ignore_errors: yes
+
+- name: ⏳ Esperar limpieza completa
+  pause:
+    seconds: 30
+
+- name: 📦 Instalar Nginx Ingress Controller (sin wait)
+  shell: |
+    helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
+      --namespace ingress-nginx \
+      --create-namespace \
+      --set controller.service.type=LoadBalancer \
+      --set controller.publishService.enabled=true \
+      --atomic
+  register: helm_install
+  ignore_errors: yes
+  
+- debug:
+    var: helm_install.stdout
+
+- name: ⏳ Esperar inicialización de pods (con verificación manual)
+  shell: |
+    echo "🔄 Iniciando monitoreo del Ingress Controller..."
+    # Esperar máximo 10 minutos
+    timeout 600 bash -c '
+      while true; do
+        READY=$(kubectl get deployment -n ingress-nginx nginx-ingress-ingress-nginx-controller -o jsonpath="{.status.readyReplicas}" 2>/dev/null || echo "0")
+        DESIRED=$(kubectl get deployment -n ingress-nginx nginx-ingress-ingress-nginx-controller -o jsonpath="{.status.replicas}" 2>/dev/null || echo "0")
+        
+        if [ "$READY" -eq "$DESIRED" ] && [ "$DESIRED" -ge "1" ]; then
+          echo "✅ Controlador listo con $READY/$DESIRED réplicas"
+          exit 0
+        fi
+        
+        # Verificar si hay pods en error
+        ERROR_PODS=$(kubectl get pods -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx --field-selector=status.phase=Failed -o name | wc -l)
+        if [ "$ERROR_PODS" -gt "0" ]; then
+          echo "❌ Hay $ERROR_PODS pods en estado Failed"
+          kubectl get pods -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
+          exit 1
+        fi
+        
+        echo "⏳ Esperando controlador... ($READY/$DESIRED réplicas listas)"
+        sleep 30
+      done
+    ' 
+    EXIT_CODE=$?
+    
+    if [ $EXIT_CODE -eq 0 ]; then
+      echo "🎉 Ingress Controller desplegado exitosamente"
+    elif [ $EXIT_CODE -eq 124 ]; then
+      echo "⚠️ Timeout alcanzado después de 10 minutos"
+      echo "📊 Estado actual:"
+      kubectl get pods -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
+    else
+      echo "❌ Error durante el monitoreo"
+    fi
+    
+    exit $EXIT_CODE
+  register: wait_result
+  ignore_errors: yes
+
+- debug:
+    var: wait_result.stdout
+
+- name: 🔍 Verificar estado actual del ingress
+  shell: |
+    echo "=== DEPLOYMENTS ==="
+    kubectl get deployments -n ingress-nginx
+    echo ""
+    echo "=== PODS ==="
+    kubectl get pods -n ingress-nginx -o wide
+    echo ""
+    echo "=== SERVICES ==="
+    kubectl get services -n ingress-nginx
+    echo ""
+    echo "=== INGRESS CLASSES ==="
+    kubectl get ingressclasses
+    echo ""
+    echo "=== EVENTOS RECIENTES ==="
+    kubectl get events -n ingress-nginx --sort-by='.lastTimestamp' --tail=20
+  register: status_check
+  
+- debug:
+    var: status_check.stdout
+
+- name: 📡 Obtener LoadBalancer URL (si está disponible)
+  shell: |
+    kubectl get service -n ingress-nginx nginx-ingress-ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "PENDIENTE"
+  register: lb_url
+
+- name: 🌐 Mostrar información del Ingress
+  debug:
+    msg: |
+      📊 ESTADO DEL INGRESS CONTROLLER:
+      
+      📍 LoadBalancer URL: {{ lb_url.stdout }}
+      🔧 Helm Install Exit Code: {{ helm_install.rc }}
+      ⏱️ Wait Result Exit Code: {{ wait_result.rc }}
+      
+      {% if wait_result.rc == 0 %}
+      🎉 INGRESS CONTROLLER INSTALADO EXITOSAMENTE!
+      {% elif wait_result.rc == 124 %}
+      ⚠️ INGRESS CONTROLLER PARCIALMENTE INSTALADO (Timeout)
+      {% else %}
+      ❌ INGRESS CONTROLLER CON PROBLEMAS
+      {% endif %}
+      
+      🔍 Comandos de verificación:
+      kubectl get pods -n ingress-nginx
+      kubectl get service -n ingress-nginx
+      kubectl describe pod -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
+      
+      🌐 Para acceder a tu aplicación (cuando esté lista):
+      curl http://{{ lb_url.stdout }}

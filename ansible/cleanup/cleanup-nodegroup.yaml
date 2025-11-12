@@ -1,0 +1,117 @@
+---
+- name: 🧹 Limpieza Específica - Node Group EKS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    cluster_name: "cc-contenedores-cluster"
+    nodegroup_name: "cc-contenedores-nodes"
+    aws_region: "us-east-1"
+
+  tasks:
+    - name: 📊 Estado inicial
+      debug:
+        msg: "🔄 INICIANDO LIMPIEZA DEL NODE GROUP"
+
+    - name: 🔍 Verificar node groups existentes
+      shell: |
+        aws eks list-nodegroups \
+          --cluster-name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'nodegroups' \
+          --output table
+      register: existing_nodegroups
+
+    - debug:
+        var: existing_nodegroups.stdout
+
+    - name: 🗑️ Eliminar node group específico
+      shell: |
+        aws eks delete-nodegroup \
+          --cluster-name "{{ cluster_name }}" \
+          --nodegroup-name "{{ nodegroup_name }}" \
+          --region "{{ aws_region }}" \
+          --no-cli-pager
+      register: delete_command
+      ignore_errors: yes
+
+    - debug:
+        var: delete_command.stdout
+
+    - name: 📋 Mostrar estado de eliminación
+      shell: |
+        aws eks describe-nodegroup \
+          --cluster-name "{{ cluster_name }}" \
+          --nodegroup-name "{{ nodegroup_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'nodegroup.status' \
+          --output text 2>/dev/null || echo "NOT_FOUND"
+      register: initial_status
+
+    - debug:
+        msg: "Estado inicial después de eliminar: {{ initial_status.stdout }}"
+
+    - name: ⏳ Monitorear eliminación continuamente
+      ansible.builtin.shell: |
+        while true; do
+          STATUS=$(aws eks describe-nodegroup \
+            --cluster-name "{{ cluster_name }}" \
+            --nodegroup-name "{{ nodegroup_name }}" \
+            --region "{{ aws_region }}" \
+            --query 'nodegroup.status' \
+            --output text 2>/dev/null || echo "DELETED")
+          
+          echo "Estado: $STATUS - $(date)"
+          
+          if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "NOT_FOUND" ]; then
+            echo "✅ Node group eliminado"
+            break
+          fi
+          sleep 30
+        done
+      register: monitor_result
+      async: 1800
+      poll: 0
+
+    - debug:
+        var: monitor_result.stdout
+
+    - name: ⏳ Esperar a que termine el monitoreo
+      async_status:
+        jid: "{{ monitor_result.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 60
+      delay: 30
+
+    - debug:
+        msg: "Resultado del monitoreo: {{ job_result.ansible_job_id }} - Exit Code: {{ job_result.rc }}"
+
+    - debug:
+        var: job_result.stdout_lines
+
+    - name: 🔍 Verificación final
+      shell: |
+        echo "=== VERIFICACIÓN FINAL ==="
+        echo "Node Groups existentes:"
+        aws eks list-nodegroups \
+          --cluster-name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'nodegroups' \
+          --output table || echo "No hay node groups"
+      register: final_check
+
+    - debug:
+        var: final_check.stdout
+
+    - name: ✅ Resumen de limpieza
+      debug:
+        msg: |
+          🎉 LIMPIEZA DEL NODE GROUP COMPLETADA
+          
+          📊 RESULTADO:
+          - Node Group: {{ nodegroup_name }}
+          - Cluster: {{ cluster_name }}
+          - Estado: {{ '✅ ELIMINADO' if job_result.rc == 0 else '❌ PENDIENTE' }}
+          
+          🔄 Ahora puedes recrear el node group limpio.

@@ -14,26 +14,34 @@
 
     - name: 🏗️ Crear infraestructura base AWS
       include_tasks: aws-infra-setup.yaml
+      tags: infra
 
     - name: ☸️ Crear cluster EKS
       include_tasks: aws-eks-setup.yaml
+      tags: eks
 
     - name: ⏳ Esperar que cluster EKS esté listo
       pause:
         minutes: 3
         prompt: "Esperando que el cluster EKS esté completamente disponible..."
+      tags: wait
 
     - name: 🔧 Configurar acceso a cluster EKS
       include_tasks: k8s-config-setup.yaml
+      tags: config
 
     - name: 🚀 Desplegar aplicación en Kubernetes
       include_tasks: k8s-deployment.yaml
+      tags: app
 
-    - name: 🌐 Configurar Ingress y DNS
-      include_tasks: k8s-ingress-setup.yaml
+    # - name: 🌐 Configurar Ingress y DNS
+    #   include_tasks: k8s-ingress-setup.yaml
+    #   tags: ingress
 
     - name: 📊 Verificar despliegue
       include_tasks: k8s-verification.yaml
+      tags: verify
 
     - name: 🎉 Mostrar información de acceso
       include_tasks: show-access-info.yaml
+      tags: info

@@ -1,0 +1,231 @@
+---
+- name: 🧹 Limpieza COMPLETA - EKS + Recursos Asociados
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    cluster_name: "cc-contenedores-cluster"
+    nodegroup_name: "cc-contenedores-nodes"
+    aws_region: "us-east-1"
+    project_name: "cc-contenedores"
+
+  tasks:
+    - name: 📊 Estado inicial
+      debug:
+        msg: "🔄 INICIANDO LIMPIEZA COMPLETA - EKS + RECURSOS ASOCIADOS"
+
+    - name: 🔍 Verificar si el cluster existe
+      shell: |
+        aws eks describe-cluster \
+          --name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --query 'cluster.status' \
+          --output text 2>/dev/null || echo "NOT_FOUND"
+      register: cluster_status_check
+      ignore_errors: yes
+
+    - name: 📋 Mostrar estado del cluster
+      debug:
+        msg: "Estado del cluster '{{ cluster_name }}': {{ cluster_status_check.stdout }}"
+
+    - name: 🗑️ 1. Eliminar Node Group (si el cluster existe)
+      shell: |
+        aws eks delete-nodegroup \
+          --cluster-name "{{ cluster_name }}" \
+          --nodegroup-name "{{ nodegroup_name }}" \
+          --region "{{ aws_region }}" \
+          --no-cli-pager
+      register: delete_nodegroup
+      ignore_errors: yes
+      when: cluster_status_check.stdout != "NOT_FOUND"
+
+    - name: ⏳ Esperar eliminación Node Group
+      shell: |
+        echo "⏳ Esperando eliminación del node group..."
+        for i in {1..60}; do
+          STATUS=$(aws eks describe-nodegroup \
+            --cluster-name "{{ cluster_name }}" \
+            --nodegroup-name "{{ nodegroup_name }}" \
+            --region "{{ aws_region }}" \
+            --query 'nodegroup.status' \
+            --output text 2>/dev/null || echo "DELETED")
+          
+          echo "Intento $i/60 - Estado: $STATUS"
+          
+          if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "NOT_FOUND" ]; then
+            echo "✅ Node group eliminado"
+            exit 0
+          fi
+          sleep 30
+        done
+        echo "❌ Timeout eliminación node group"
+        exit 1
+      register: wait_nodegroup
+      async: 2100
+      poll: 0
+      when: 
+        - cluster_status_check.stdout != "NOT_FOUND"
+        - delete_nodegroup is defined
+
+    - name: 🗑️ 2. Eliminar Cluster EKS (si existe)
+      shell: |
+        aws eks delete-cluster \
+          --name "{{ cluster_name }}" \
+          --region "{{ aws_region }}" \
+          --no-cli-pager
+      register: delete_cluster
+      ignore_errors: yes
+      when: cluster_status_check.stdout != "NOT_FOUND"
+
+    - name: ⏳ Esperar eliminación Cluster
+      shell: |
+        echo "⏳ Esperando eliminación del cluster..."
+        for i in {1..80}; do
+          STATUS=$(aws eks describe-cluster \
+            --name "{{ cluster_name }}" \
+            --region "{{ aws_region }}" \
+            --query 'cluster.status' \
+            --output text 2>/dev/null || echo "DELETED")
+          
+          echo "Intento $i/80 - Estado: $STATUS"
+          
+          if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "NOT_FOUND" ]; then
+            echo "✅ Cluster eliminado"
+            exit 0
+          fi
+          sleep 30
+        done
+        echo "❌ Timeout eliminación cluster"
+        exit 1
+      register: wait_cluster
+      async: 2700
+      poll: 0
+      when: 
+        - cluster_status_check.stdout != "NOT_FOUND"
+        - delete_cluster is defined
+
+    - name: 🔍 3. Buscar recursos huérfanos del cluster
+      block:
+        - name: 🔍 Buscar Auto Scaling Groups del cluster
+          shell: |
+            aws autoscaling describe-auto-scaling-groups \
+              --region "{{ aws_region }}" \
+              --query "AutoScalingGroups[?contains(Tags[?Key=='eks:cluster-name'].Value, '{{ cluster_name }}')].AutoScalingGroupName" \
+              --output text 2>/dev/null || echo ""
+          register: asg_list
+
+        - name: 🔍 Buscar Launch Templates del cluster
+          shell: |
+            aws ec2 describe-launch-templates \
+              --region "{{ aws_region }}" \
+              --query "LaunchTemplates[?contains(LaunchTemplateName, '{{ cluster_name }}')].LaunchTemplateName" \
+              --output text 2>/dev/null || echo ""
+          register: lt_list
+
+        - name: 🔍 Buscar Network Interfaces del cluster
+          shell: |
+            aws ec2 describe-network-interfaces \
+              --region "{{ aws_region }}" \
+              --filters "Name=description,Values=*{{ cluster_name }}*" \
+              --query 'NetworkInterfaces[].NetworkInterfaceId' \
+              --output text 2>/dev/null || echo ""
+          register: eni_list
+
+        - name: 🔍 Buscar Security Groups automáticos del cluster
+          shell: |
+            aws ec2 describe-security-groups \
+              --region "{{ aws_region }}" \
+              --filters "Name=group-name,Values=*eks*{{ cluster_name }}*" \
+              --query 'SecurityGroups[].GroupId' \
+              --output text 2>/dev/null || echo ""
+          register: sg_auto_list
+
+      always:
+        - name: 📊 Mostrar recursos encontrados
+          debug:
+            msg: |
+              Recursos huérfanos encontrados:
+              - Auto Scaling Groups: {{ asg_list.stdout | default('Ninguno') }}
+              - Launch Templates: {{ lt_list.stdout | default('Ninguno') }}
+              - Network Interfaces: {{ eni_list.stdout | default('Ninguno') }}
+              - Security Groups: {{ sg_auto_list.stdout | default('Ninguno') }}
+
+    - name: 🗑️ 4. Eliminar recursos huérfanos
+      block:
+        - name: 🗑️ Eliminar Auto Scaling Groups
+          shell: |
+            aws autoscaling delete-auto-scaling-group \
+              --auto-scaling-group-name "{{ item }}" \
+              --region "{{ aws_region }}" \
+              --force-delete
+          loop: "{{ asg_list.stdout.split() }}"
+          ignore_errors: yes
+          when: asg_list.stdout | length > 0
+
+        - name: 🗑️ Eliminar Launch Templates
+          shell: |
+            aws ec2 delete-launch-template \
+              --launch-template-name "{{ item }}" \
+              --region "{{ aws_region }}"
+          loop: "{{ lt_list.stdout.split() }}"
+          ignore_errors: yes
+          when: lt_list.stdout | length > 0
+
+        - name: 🗑️ Eliminar Network Interfaces
+          shell: |
+            aws ec2 delete-network-interface \
+              --network-interface-id "{{ item }}" \
+              --region "{{ aws_region }}"
+          loop: "{{ eni_list.stdout.split() }}"
+          ignore_errors: yes
+          when: eni_list.stdout | length > 0
+
+        - name: 🗑️ Eliminar Security Groups automáticos
+          shell: |
+            aws ec2 delete-security-group \
+              --group-id "{{ item }}" \
+              --region "{{ aws_region }}"
+          loop: "{{ sg_auto_list.stdout.split() }}"
+          ignore_errors: yes
+          when: sg_auto_list.stdout | length > 0
+
+    - name: 🧹 5. Limpiar configuración local
+      shell: |
+        echo "🧹 Limpiando configuración local de kubectl..."
+        kubectl config delete-cluster "{{ cluster_name }}" 2>/dev/null || echo "⚠️ Cluster config no existe"
+        kubectl config delete-context "{{ cluster_name }}" 2>/dev/null || echo "⚠️ Context no existe"
+        kubectl config unset users.{{ cluster_name }} 2>/dev/null || echo "⚠️ User config no existe"
+        echo "✅ Configuración local limpiada"
+      ignore_errors: yes
+
+    - name: 🔍 6. Verificación final
+      shell: |
+        echo "=== VERIFICACIÓN FINAL ==="
+        echo ""
+        echo "📋 Clusters EKS existentes:"
+        aws eks list-clusters --region "{{ aws_region }}" --query 'clusters' --output table 2>/dev/null || echo "No hay clusters"
+        echo ""
+        echo "🔄 Auto Scaling Groups huérfanos:"
+        aws autoscaling describe-auto-scaling-groups --region "{{ aws_region }}" --query "AutoScalingGroups[?contains(Tags[?Key=='eks:cluster-name'].Value, '{{ cluster_name }}')].AutoScalingGroupName" --output table 2>/dev/null || echo "No hay ASGs huérfanos"
+        echo ""
+        echo "🌐 Network Interfaces huérfanas:"
+        aws ec2 describe-network-interfaces --region "{{ aws_region }}" --filters "Name=description,Values=*{{ cluster_name }}*" --query 'NetworkInterfaces[].NetworkInterfaceId' --output table 2>/dev/null || echo "No hay ENIs huérfanas"
+      register: final_check
+
+    - debug:
+        var: final_check.stdout
+
+    - name: ✅ Resumen de limpieza
+      debug:
+        msg: |
+          🎉 PROCESO DE LIMPIEZA COMPLETADO
+
+          📊 RESULTADO:
+          - Cluster: {{ cluster_name }}
+          - Estado inicial: {{ cluster_status_check.stdout }}
+          - Node Groups eliminados: {{ '✅' if cluster_status_check.stdout == 'NOT_FOUND' or delete_nodegroup is defined else '❌' }}
+          - Cluster eliminado: {{ '✅' if cluster_status_check.stdout == 'NOT_FOUND' or delete_cluster is defined else '❌' }}
+          - Recursos huérfanos limpiados: {{ (asg_list.stdout.split() + lt_list.stdout.split() + eni_list.stdout.split() + sg_auto_list.stdout.split()) | length }}
+
+          💡 Si el cluster ya estaba eliminado, se limpiaron recursos huérfanos.
+          💡 La eliminación física en AWS puede continuar en segundo plano.

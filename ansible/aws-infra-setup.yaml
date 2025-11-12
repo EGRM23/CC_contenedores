@@ -164,6 +164,90 @@
         msg: "Subnet {{ item.item }} - MapPublicIpOnLaunch: {{ item.stdout }}"
       loop: "{{ subnet_public_ip_check.results }}"
 
+- name: 🛣️ CONFIGURACIÓN CRÍTICA - Route Tables para Internet
+  block:
+    - name: 🔍 Obtener Internet Gateway ID
+      shell: |
+        aws ec2 describe-internet-gateways \
+          --filters "Name=attachment.vpc-id,Values={{ vpc_id }}" \
+          --region {{ aws_region }} \
+          --query 'InternetGateways[].InternetGatewayId' \
+          --output text
+      register: igw_id
+
+    - name: 📝 Crear Route Table pública
+      shell: |
+        aws ec2 create-route-table \
+          --vpc-id "{{ vpc_id }}" \
+          --region "{{ aws_region }}" \
+          --tag-specifications 'ResourceType=route-table,Tags=[{Key=Name,Value={{ project_name }}-public-rt},{Key=Project,Value={{ project_name }}}]' \
+          --query 'RouteTable.RouteTableId' \
+          --output text
+      register: route_table_output
+
+    - name:  Agregar ruta a Internet Gateway
+      shell: |
+        aws ec2 create-route \
+          --route-table-id "{{ route_table_output.stdout }}" \
+          --destination-cidr-block "0.0.0.0/0" \
+          --gateway-id "{{ igw_id.stdout }}" \
+          --region "{{ aws_region }}"
+      ignore_errors: yes
+
+    - name: 🔗 Asociar Route Table a TODAS las subnets
+      shell: |
+        aws ec2 associate-route-table \
+          --route-table-id "{{ route_table_output.stdout }}" \
+          --subnet-id "{{ item }}" \
+          --region "{{ aws_region }}"
+      loop: "{{ subnet_ids }}"
+
+    - name: 💾 Guardar Route Table ID
+      set_fact:
+        route_table_id: "{{ route_table_output.stdout }}"
+
+  rescue:
+    - name: ⚠️  Error configurando Route Tables
+      debug:
+        msg: "Error en Route Tables. La verificación posterior fallará."
+
+- name: ✅ VERIFICAR CRÍTICA - Route Tables configuradas
+  block:
+    - name: 🔍 Verificar Route Tables en subnets
+      shell: |
+        aws ec2 describe-route-tables \
+          --filters "Name=association.subnet-id,Values={{ subnet_ids | join(',') }}" \
+          --region {{ aws_region }} \
+          --query 'length(RouteTables)' \
+          --output text
+      register: route_table_check
+
+    - name: 🔍 Verificar rutas a Internet
+      shell: |
+        aws ec2 describe-route-tables \
+          --filters "Name=association.subnet-id,Values={{ subnet_ids | join(',') }}" \
+          --region {{ aws_region }} \
+          --query 'RouteTables[].Routes[?DestinationCidrBlock==`0.0.0.0/0`].State' \
+          --output text
+      register: internet_route_check
+
+    - name: 📋 Mostrar resultado de verificación
+      debug:
+        msg: |
+          VERIFICACIÓN ROUTE TABLES:
+          - Route Tables asociadas: {{ route_table_check.stdout }}
+          - Rutas a Internet: {{ internet_route_check.stdout }}
+
+    - name: 🚨 FALLAR si no hay Route Tables configuradas
+      fail:
+        msg: "❌ CRÍTICO: Las subnets NO tienen Route Tables asociadas. Las instancias no tendrán internet."
+      when: route_table_check.stdout == "0"
+
+    - name: 🚨 FALLAR si no hay rutas a Internet
+      fail:
+        msg: "❌ CRÍTICO: No hay rutas a Internet (0.0.0.0/0) en las Route Tables."
+      when: internet_route_check.stdout == ""
+
 - name: 🛡️ Crear o actualizar Security Group
   block:
     - name: Buscar Security Group existente
@@ -205,6 +289,21 @@
             from_port: 1025
             to_port: 65535
             cidr_ip: "0.0.0.0/0"
+          - proto: tcp
+            from_port: 30080
+            to_port: 30080
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Frontend NodePort"
+          - proto: tcp
+            from_port: 30081
+            to_port: 30081
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Backend NodePort"
+          - proto: tcp
+            from_port: 30000
+            to_port: 32767
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Kubernetes NodePort range"
         tags:
           Project: "{{ project_name }}"
       register: sg_nuevo
@@ -241,6 +340,21 @@
             from_port: 1025
             to_port: 65535
             cidr_ip: "0.0.0.0/0"
+          - proto: tcp
+            from_port: 30080
+            to_port: 30080
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Frontend NodePort"
+          - proto: tcp
+            from_port: 30081
+            to_port: 30081
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Backend NodePort"
+          - proto: tcp
+            from_port: 30000
+            to_port: 32767
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Kubernetes NodePort range"
         purge_rules: false
       when: sg_existente.security_groups | length > 0
 
