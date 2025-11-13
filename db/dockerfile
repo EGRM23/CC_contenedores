@@ -1,8 +1,7 @@
-FROM mysql:8.0
+FROM mysql:5.7
 
-ENV MYSQL_ROOT_PASSWORD=rootpassword
-ENV MYSQL_DATABASE=testdb
+RUN echo "[mysqld]" >> /etc/mysql/conf.d/bind.cnf && \
+    echo "bind-address = 0.0.0.0" >> /etc/mysql/conf.d/bind.cnf
 
 COPY init.sql /docker-entrypoint-initdb.d/
-
 EXPOSE 3306

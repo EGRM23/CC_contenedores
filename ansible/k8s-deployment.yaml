@@ -51,7 +51,7 @@
             containers:
               - name: db
                 image: "{{ db_image }}"
-                imagePullPolicy: IfNotPresent
+                imagePullPolicy: Always
                 env:
                   - name: MYSQL_ROOT_PASSWORD
                     valueFrom:
@@ -79,7 +79,7 @@
             #   - name: mysql-storage
             #     persistentVolumeClaim:
             #       claimName: mysql-pvc
-            restartPolicy: Always  # ✅ AGREGADO
+            restartPolicy: Always
 
 
 - name: 🌐 Servicio para Base de Datos
@@ -120,7 +120,7 @@
             containers:
               - name: backend
                 image: "{{ backend_image }}"
-                imagePullPolicy: IfNotPresent
+                imagePullPolicy: Always
                 ports:
                   - containerPort: 3000
                 resources:
@@ -172,7 +172,7 @@
             containers:
               - name: frontend
                 image: "{{ frontend_image }}"
-                imagePullPolicy: IfNotPresent
+                imagePullPolicy: Always
                 ports:
                   - containerPort: 80
                 resources:

@@ -5,13 +5,16 @@ const cors = require('cors');
 const app = express();
 const port = 3000;
 
-app.use(cors({
-  origin: ['http://miapp.local', 'http://localhost', 'http://frontend'],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
-app.use(express.json());
+// ESTA OPCIÓN PUEDE MANEJARSE MUY BIEN CON UN INGRESS, PERO AGREGA COMPLEJIDAD
+// app.use(cors({
+//   origin: ['http://miapp.local', 'http://localhost', 'http://frontend'],
+//   methods: ['GET', 'POST', 'PUT', 'DELETE'],
+//   allowedHeaders: ['Content-Type', 'Authorization'],
+//   credentials: true
+// }));
+// app.use(express.json());
+
+app.use(cors());
 
 const pool = mysql.createPool({
   host: "db",
@@ -21,21 +24,34 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  reconnect: true
+  ssl: false,
+  insecureAuth: true
 });
 
 pool.getConnection((err, connection) => {
   if (err) {
-    console.error("ERROR AL CONECTAR CON LA DB:", err.message);
-    console.log("Reintentando automáticamente...");
+    console.error("=== ERROR DETALLADO DE CONEXIÓN ===");
+    console.error("Timestamp:", new Date().toISOString());
+    console.error("Mensaje:", err.message);
+    console.error("Código:", err.code);
+    console.error("Errno:", err.errno);
+    console.error("SQL State:", err.sqlState);
+    console.error("Stack:", err.stack);
+    
+    // Debug de configuración
+    console.error("Config host:", pool.config.connectionConfig.host);
+    console.error("Config user:", pool.config.connectionConfig.user);
+    console.error("Config database:", pool.config.connectionConfig.database);
+    console.error("=== FIN ERROR ===");
+    
     return;
   }
-  console.log("CONEXION A MySQL ACTIVA! (Pool creado)");
+  console.log("✅ CONEXION A MySQL ACTIVA! (Pool creado)");
   connection.release();
 });
 
 app.get("/", (req, res) => {
-  res.send("EL BACKEND TIENE VIDA! Con Node.js y Connection Pooling");
+  res.send("EL BACKEND TIENE VIDA (MUY INSEGURO PERO CON VIDA :D)! Con Node.js y Connection Pooling");
 });
 
 app.get("/users", (req, res) => {

@@ -2,10 +2,14 @@
 <html>
 <head>
   <title>Mi App con Docker</title>
+  <meta charset="UTF-8"/>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐳</text></svg>">
   <script>
+    const API_BASE_URL = "http://backend:3000";
+
     async function cargarUsuarios() {
       try {
-        const res = await fetch("/api/users");
+        const res = await fetch(`${API_BASE_URL}/users`);
         const data = await res.json();
         let lista = document.getElementById("usuarios");
         lista.innerHTML = "";
